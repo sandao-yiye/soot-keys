@@ -53,6 +53,12 @@ namespace SootKeys
             if (pose == Pose.Enter) winkEnd = now + .19;
         }
 
+        internal void Audition(Pose pose, double now)
+        {
+            streak = 0;
+            Begin(pose, now);
+        }
+
         internal void Reset(double now)
         {
             current = pending = Pose.Idle;

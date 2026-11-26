@@ -1,16 +1,16 @@
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Threading;
 using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Soot Keys")]
 [assembly: AssemblyDescription("A four-pawed keyboard companion")]
 [assembly: AssemblyProduct("Soot Keys")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace SootKeys
 {
@@ -21,32 +21,91 @@ namespace SootKeys
         {
             bool test = args.Length == 1 && args[0] == "--self-test";
             bool smoke = args.Length == 1 && args[0] == "--smoke-test";
+            bool stop = args.Length == 1 && args[0] == "--stop-linked";
+            bool linked = args.Length >= 1 && args.Length <= 2 && args[0] == "--codex-linked";
             try
             {
-                using (Illustration art = new Illustration())
+                if (args.Length == 2 && args[0] == "--watch-mask") return MascotMask.Watch(args[1]);
+                if (stop) { InstanceGate.StopLinked(); return 0; }
+                if (args.Length > 0 && !test && !smoke && !linked) return 2;
+                if (test)
                 {
-                    if (test) { Verify(art); return 0; }
-                    Native.DpiAware();
-                    Application.EnableVisualStyles();
-                    Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
-                    bool first;
-                    using (Mutex mutex = new Mutex(true, smoke ? null : @"Local\SootKeys.LiveCat.1", out first))
+                    using (Illustration art = new Illustration()) Verify(art);
+                    CodexLink.Verify();
+                    CatToolbox.SelfTest();
+                    VerifySettings();
+                    return 0;
+                }
+                Native.DpiAware();
+                Application.EnableVisualStyles();
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+                if (smoke)
+                {
+                    string dir = TemporaryDirectory();
+                    try
                     {
-                        if (!first) return 0;
-                        using (PetWindow window = new PetWindow(art, smoke))
+                        PetSettings settings = new PetSettings(Path.Combine(dir, "settings.ini"));
+                        using (Illustration art = new Illustration())
+                        using (PetWindow window = new PetWindow(art, settings, true))
                             Application.Run(window);
+                        LiveHost.Verify(new PetSettings(Path.Combine(dir, "link-test.ini")));
+                    }
+                    finally { Directory.Delete(dir, true); }
+                    return 0;
+                }
+                using (InstanceGate gate = new InstanceGate())
+                {
+                    if (!gate.Start(linked)) return 0;
+                    string home = linked && args.Length == 2 ? Path.GetFullPath(args[1]) : Environment.GetEnvironmentVariable("CODEX_HOME");
+                    if (String.IsNullOrEmpty(home)) home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+                    using (CodexLink link = linked ? new CodexLink(home) : null)
+                    using (LiveHost host = new LiveHost(new PetSettings(PetSettings.DefaultPath),
+                              link == null ? (Func<bool, bool>)null : link.Refresh, gate.Stopping, gate.ManualRequested))
+                    {
+                        Application.Run(host);
                     }
                 }
                 return 0;
             }
             catch (Exception error)
             {
-                if (test || smoke)
+                if (test || smoke || stop || linked)
                     Console.Error.WriteLine(error.ToString());
                 else
                     MessageBox.Show(error.Message, "Soot Keys", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
+        }
+
+        static string TemporaryDirectory()
+        {
+            return Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "SootKeys-" + Guid.NewGuid().ToString("N"))).FullName;
+        }
+
+        static void VerifySettings()
+        {
+            string dir = TemporaryDirectory();
+            try
+            {
+                string path = Path.Combine(dir, "settings.ini");
+                PetSettings settings = new PetSettings(path);
+                int[] widths = { 162, 192, 220, 249, 278 };
+                for (int i = 0; i < widths.Length; i++)
+                {
+                    settings.Level = i;
+                    Check(settings.Pixels(96).Width == widths[i], "size level " + i);
+                    Check(settings.Save(), "saving settings");
+                }
+                settings.Follow = true; settings.Paused = true; settings.Anchor = new Point(-350, 510);
+                Check(settings.Save(), "saving position");
+                settings = new PetSettings(path);
+                Check(settings.Level == 4 && settings.Follow && settings.Paused && settings.Anchor == new Point(-350,510),
+                      "restoring size, toggles and position");
+                File.WriteAllText(path, "size=999\nanchorX=1\npaused=maybe\n");
+                settings.Reload();
+                Check(settings.Level == PetSettings.Standard && !settings.Anchor.HasValue && !settings.Paused, "invalid settings recovery");
+            }
+            finally { Directory.Delete(dir, true); }
         }
 
         static void Check(bool success, string subject)

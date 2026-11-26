@@ -18,6 +18,11 @@ namespace SootKeys
         readonly ToolStripMenuItem follow = new ToolStripMenuItem("整只猫跟随鼠标");
         readonly ToolStripMenuItem pause = new ToolStripMenuItem("暂停键鼠互动");
         readonly bool smokeTest;
+        readonly bool quiet;
+        readonly PetSettings preferences;
+        readonly CatToolbox toolbox;
+        readonly ToolStripMenuItem[] levels = new ToolStripMenuItem[PetSettings.Sizes.Length];
+        bool refreshing;
         readonly IntPtr scratch = Marshal.AllocHGlobal(64);
         Surface surface;
         PointF position;
@@ -29,10 +34,13 @@ namespace SootKeys
         int lastFrame;
         float lastX, lastY, lastLeft, lastRight;
 
-        internal PetWindow(Illustration images, bool test)
+        internal PetWindow(Illustration images, PetSettings settings, bool test, bool quiet = false, bool linked = false)
         {
             art = images;
+            preferences = settings;
             smokeTest = test;
+            this.quiet = quiet || test;
+            toolbox = this.quiet ? new CatToolbox(Audition, settings.TestDirectory) : new CatToolbox(Audition);
             Text = "Soot Keys · 墨爪";
             ShowInTaskbar = false;
             FormBorderStyle = FormBorderStyle.None;
@@ -44,22 +52,75 @@ namespace SootKeys
             Location = new Point(desk.Right - Width - 24, desk.Bottom - Height - 20);
             follow.CheckOnClick = true;
             pause.CheckOnClick = true;
+            menu.Items.Add("打开 Codex", null, delegate
+            {
+                try
+                {
+                    using (Process launched = Process.Start(new ProcessStartInfo("codex://") { UseShellExecute = true })) { }
+                }
+                catch (Win32Exception)
+                {
+                    tray.ShowBalloonTip(3500, "墨爪", "未能打开 Codex。请确认已安装 Codex 桌面端。", ToolTipIcon.Info);
+                }
+            });
+            menu.Items.Add("碎碎念", null, delegate { toolbox.Quip(); });
+            menu.Items.Add("墨爪百宝箱", null, delegate { toolbox.Open(); });
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("回到初始位置", null, delegate
+            {
+                preferences.Anchor = null;
+                follow.Checked = false;
+                RestorePosition();
+                SavePreferences();
+            });
+            ToolStripMenuItem sizeMenu = new ToolStripMenuItem("调整大小");
+            for (int index = 0; index < levels.Length; index++)
+            {
+                int level = index;
+                levels[index] = new ToolStripMenuItem(PetSettings.Sizes[index], null, delegate { ChangeSize(level); });
+                sizeMenu.DropDownItems.Add(levels[index]);
+            }
+            sizeMenu.DropDownItems.Add(new ToolStripSeparator());
+            sizeMenu.DropDownItems.Add("恢复标准大小", null, delegate { ChangeSize(PetSettings.Standard); });
+            menu.Items.Add(sizeMenu);
+            menu.Items.Add("重载配置", null, delegate
+            {
+                preferences.Reload();
+                RefreshMenu();
+                EnsureSurface();
+                RestorePosition();
+                SetListening(!preferences.Paused);
+            });
+            ToolStripMenuItem actions = new ToolStripMenuItem("动作");
+            string[] actionNames = { "收爪待机", "左前爪拍键", "右前爪拍键", "左后脚踩空格",
+                                     "右后脚够回车", "伸爪够鼠标", "四脚连击" };
+            for (int i = 0; i < actionNames.Length; i++)
+            {
+                Pose selected = (Pose)i;
+                actions.DropDownItems.Add(actionNames[i], null, delegate { Audition(selected); });
+            }
+            menu.Items.Add(actions);
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(follow);
             menu.Items.Add(pause);
-            menu.Items.Add("移回鼠标所在屏幕", null, delegate
-            {
-                Rectangle work = Screen.FromPoint(Cursor.Position).WorkingArea;
-                position = new PointF(work.Right - surface.Size.Width - 24, work.Bottom - surface.Size.Height - 20);
-                dirty = true;
-            });
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("退出墨爪", null, delegate { Close(); });
+            menu.Items.Add(linked ? "暂时收起墨爪" : "退出墨爪", null, delegate { Close(); });
             pause.CheckedChanged += delegate
             {
+                if (refreshing) return;
+                preferences.Paused = pause.Checked;
                 SetListening(!pause.Checked);
                 motion.Reset(clock.Elapsed.TotalSeconds);
                 dirty = true;
+                SavePreferences();
             };
+            follow.CheckedChanged += delegate
+            {
+                if (refreshing) return;
+                preferences.Follow = follow.Checked;
+                SavePreferences();
+            };
+            RefreshMenu();
             tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             tray.Text = "墨爪 · 右键设置，拖动小猫换位置";
             tray.ContextMenuStrip = menu;
@@ -67,10 +128,65 @@ namespace SootKeys
             MouseMove += OnPetMove;
             MouseUp += delegate(object sender, MouseEventArgs e)
             {
-                if (e.Button == MouseButtons.Left) { dragging = false; Capture = false; }
+                if (dragging && e.Button == MouseButtons.Left)
+                {
+                    dragging = false;
+                    Capture = false;
+                    preferences.Anchor = AnchorPoint();
+                    SavePreferences();
+                }
             };
             MouseCaptureChanged += delegate { if (!Capture) dragging = false; };
             timer.Tick += delegate { Tick(); };
+        }
+
+        void Audition(Pose pose)
+        {
+            motion.Audition(pose, clock.Elapsed.TotalSeconds);
+            dirty = true;
+        }
+
+        void SavePreferences()
+        {
+            if (!preferences.Save())
+                tray.ShowBalloonTip(2500, "墨爪", "本次设置已应用，本机设置文件暂时无法写入。", ToolTipIcon.Info);
+        }
+
+        void RefreshMenu()
+        {
+            refreshing = true;
+            follow.Checked = preferences.Follow;
+            pause.Checked = preferences.Paused;
+            for (int i = 0; i < levels.Length; i++) levels[i].Checked = i == preferences.Level;
+            refreshing = false;
+        }
+
+        void ChangeSize(int level)
+        {
+            preferences.Level = level;
+            RefreshMenu();
+            EnsureSurface();
+            SavePreferences();
+        }
+
+        Point AnchorPoint()
+        {
+            return Point.Round(new PointF(position.X + surface.Size.Width / 2f, position.Y + surface.Size.Height));
+        }
+
+        void PlaceAt(Point anchor)
+        {
+            Rectangle desk = Screen.FromPoint(new Point(anchor.X, anchor.Y - 1)).WorkingArea;
+            Size size = surface.Size;
+            position = new PointF(Clamp(anchor.X - size.Width / 2f, desk.Left, desk.Right - size.Width),
+                                  Clamp(anchor.Y - size.Height, desk.Top, desk.Bottom - size.Height));
+            dirty = true;
+        }
+
+        void RestorePosition()
+        {
+            Rectangle desk = Screen.FromPoint(Cursor.Position).WorkingArea;
+            PlaceAt(preferences.Anchor ?? new Point(desk.Right - surface.Size.Width / 2 - 24, desk.Bottom - 20));
         }
 
         protected override bool ShowWithoutActivation { get { return true; } }
@@ -88,10 +204,9 @@ namespace SootKeys
         {
             base.OnShown(e);
             EnsureSurface();
-            Rectangle desk = Screen.FromHandle(Handle).WorkingArea;
-            position = new PointF(desk.Right - surface.Size.Width - 24, desk.Bottom - surface.Size.Height - 20);
-            SetListening(true);
-            tray.Visible = !smokeTest;
+            RestorePosition();
+            SetListening(!preferences.Paused);
+            tray.Visible = !quiet;
             Tick();
             timer.Start();
         }
@@ -108,10 +223,12 @@ namespace SootKeys
             uint dpi = 96;
             try { dpi = Math.Max(96u, Native.GetDpiForWindow(Handle)); }
             catch (EntryPointNotFoundException) { }
-            Size size = new Size((int)(192*dpi/96), (int)(208*dpi/96));
+            Size size = preferences.Pixels(dpi);
             if (surface != null && size == surface.Size) return;
+            Point? anchor = surface == null ? (Point?)null : AnchorPoint();
             if (surface != null) surface.Dispose();
             surface = new Surface(size);
+            if (anchor.HasValue) PlaceAt(anchor.Value);
             dirty = true;
         }
 
@@ -187,6 +304,17 @@ namespace SootKeys
             if (smokeTest && now >= .9)
             {
                 if (paints < 2) throw new InvalidOperationException("Layered window did not animate.");
+                Size prior = surface.Size;
+                Point anchor = AnchorPoint();
+                for (int i = 0; i < levels.Length; i++)
+                {
+                    levels[i].PerformClick();
+                    if (i == 0 && surface.Size.Width >= prior.Width || i > 0 && surface.Size.Width <= prior.Width)
+                        throw new InvalidOperationException("Size menu did not update the pet.");
+                    prior = surface.Size;
+                }
+                if (Math.Abs(AnchorPoint().Y - anchor.Y) > 1)
+                    throw new InvalidOperationException("Resizing moved the bottom anchor.");
                 pause.Checked = true;
                 pause.Checked = false;
                 Close();
@@ -208,6 +336,7 @@ namespace SootKeys
             if (disposing && !IsDisposed)
             {
                 timer.Dispose();
+                toolbox.Dispose();
                 if (listening)
                 {
                     try { SetListening(false); }

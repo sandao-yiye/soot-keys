@@ -1,11 +1,14 @@
-# Installs only the two files read by the Codex desktop companion picker.
+# Install the native artwork and the Windows companion-selection bridge.
 [CmdletBinding()]
 param(
     [string] $CodexHome = $env:CODEX_HOME,
-    [switch] $VerifyOnly
+    [switch] $VerifyOnly,
+    [switch] $RemoveLink
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'WindowsLink.ps1')
+if ($RemoveLink) { Update-CodexLink -Remove; return }
 if ([string]::IsNullOrWhiteSpace($CodexHome)) {
     $CodexHome = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.codex'
 }
@@ -88,3 +91,4 @@ if ($VerifyOnly -or (Test-Path -LiteralPath $destination)) {
     Confirm-PetFiles $destination
 }
 Write-Output ("Verified {0} in {1}" -f $manifest.displayName, $destination)
+Update-CodexLink $root -Verify:$VerifyOnly
