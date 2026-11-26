@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Soot Keys")]
 [assembly: AssemblyDescription("A four-pawed keyboard companion")]
 [assembly: AssemblyProduct("Soot Keys")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
 
 namespace SootKeys
 {
@@ -122,6 +122,8 @@ namespace SootKeys
             Motion cat = new Motion(42);
             int frame;
             KeyboardKey.Verify();
+            Motion.VerifyInput();
+            art.VerifyKeyTargets();
             // Exercise the same Win32 packet decoder as WM_INPUT without sending input to other apps.
             int headerBytes = 8 + IntPtr.Size * 2;
             IntPtr packet = Marshal.AllocHGlobal(64);

@@ -5,11 +5,12 @@ L, Q, C, Z commands, in a 192 by 208 design grid.
 """
 
 import math
+from functools import lru_cache
 
 import aggdraw
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
-from desk import BOARD_BACK, CAT_SCALE, KEYS, cat_point, key_center, keys
+from desk import BOARD_BACK, CAT_SCALE, DECK, KEYS, cat_point, key_center, project
 
 INK = "#171822"
 COAT = "#262631"
@@ -73,17 +74,18 @@ class Brush:
                   f"C {x-k*rx} {y+ry} {x-rx} {y+k*ry} {x-rx} {y} Z", fill, line, width)
 
 
-def digit_legend(b, cx, cy, digit):
-    # Seven tiny engraved strokes, rotated to read from the cat's seat.
-    bars = ((-1,-1.6,1,-1.6), (1,-1.6,1,0), (1,0,1,1.6), (-1,1.6,1,1.6),
-            (-1,0,-1,1.6), (-1,-1.6,-1,0), (-1,0,1,0))
-    lit = ("012345", "12", "01643", "01623", "5612",
-           "05623", "056423", "012", "0123456", "501623")
-    strokes = []
-    for index in lit[digit]:
-        x1, y1, x2, y2 = bars[int(index)]
-        strokes.append(f"M {cx-x1} {cy-y1} L {cx-x2} {cy-y2}")
-    b.path(" ".join(strokes), None, "#8D7968", .65)
+# Key legends are drawn at supersampled resolution, then rotated into the
+# typist's view. Pillow's bundled typeface makes regeneration portable.
+@lru_cache(maxsize=192)
+def legend_stamp(text, width, height):
+    font = ImageFont.load_default(size=32)
+    l,t,r,b = font.getbbox(text)
+    stamp = Image.new("RGBA", (max(1,r-l+2), max(1,b-t+2)))
+    ImageDraw.Draw(stamp).text((1-l,1-t),text,font=font,fill="#564D46",
+                               stroke_width=0)
+    factor = min(width/stamp.width, height/stamp.height)
+    return stamp.resize((max(1,round(stamp.width*factor)),max(1,round(stamp.height*factor))),
+                        Image.Resampling.LANCZOS).transpose(Image.Transpose.ROTATE_180)
 
 
 def return_legend(b, x, y):
@@ -92,44 +94,60 @@ def return_legend(b, x, y):
            None, "#8F6439", .75)
 
 
-def keyboard(b, p):
-    b.path("M 39 162 Q 40 159.5 44 159.5 L 169 159.5 Q 172 159.5 173 162 "
-           "L 186.5 192 Q 190.5 201 183.5 202 L 27 202 Q 21.5 202 25 193 Z",
-           INK, RIM, 2)
-    b.path("M 40 163 Q 40.8 161 44 161 L 168 161 Q 170.5 161 171.5 163 "
-           "L 184.8 193.7 Q 186.5 197.2 183 197.5 L 28.5 197.5 Q 26 197.5 27.2 194 Z",
-           "#B7A183")
-    b.path("M 43 162.5 L 169 162.5 L 182.3 195.2 L 29.6 195.2 Z", "#A49380")
-    accents = {(0, 0): "#EA9271", KEYS["enter"]: "#F2BA52",
-               KEYS["space"]: "#F1D49D", (0, 11): "#96B7AA"}
-    for (row, col), (left, top, right, height) in keys():
-        bottom = top + height
-        if (row, col) == KEYS["enter"] and CAP_LAUNCH < p.keycap_time < CAP_LANDING:
-            b.path(f"M {left} {top} L {right} {top} L {right+.6} {bottom} L {left-.7} {bottom} Z",
-                   "#655D56")
-            b.oval((left+right)/2, (top+bottom)/2, 2.2, 1.45, "#BE976E")
+def panel_quad(b, points, fill):
+    a,c,d,e = points
+    b.path(f"M {a[0]} {a[1]} L {c[0]} {c[1]} L {d[0]} {d[1]} L {e[0]} {e[1]} Z",fill)
+
+
+@lru_cache(maxsize=10)
+def keyboard(pressed, missing_return):
+    # Each switch sits in a recessed top plate; the fascia still faces the
+    # viewer while the legends, clusters and bevels follow the cat's key layout.
+    img = Image.new("RGBA",(192*SCALE,208*SCALE))
+    b = Brush(img)
+    b.path("M 31 160 Q 31.5 157.6 35 157.6 L 177.8 157.6 Q 180.4 157.6 181 160 "
+           "L 190 197.7 Q 191.4 202.5 187.5 203.5 L 20 203.5 "
+           "Q 15.1 203.4 17.1 197.8 Z", INK,RIM,1.45)
+    b.path("M 32.5 160.5 Q 33.1 158.5 35.3 158.5 L 177.2 158.5 Q 179.5 158.5 180 160.8 "
+           "L 188.6 197.8 Q 189.4 200.3 186.8 200.4 L 20.9 200.4 Q 18.1 200.4 19.1 197.7 Z","#C4B59B")
+    panel_quad(b,[(32.4,159.35),(178.5,159.35),(187.4,199.1),(19.5,199.1)],"#93877A")
+    mods = {"0F","3A","2A","36","1D","E01D","E05B","E05C","38","E038","E05D","0E"}
+    arrows = {"Up":(0,1), "Left":(1,0), "Down":(0,-1), "Right":(-1,0)}
+    for key in DECK:
+        a, c, d, e = key.cap()
+        x,y,w,h = key.target()
+        if key.code == "1C" and missing_return:
+            panel_quad(b, (a,c,d,e), "#665B52")
+            b.oval(x,y,1.55,1.07,"#BF9F76")
             continue
-        tone = accents.get((row, col), "#F4E8D3" if (col + row) % 3 else "#FFF3DD")
-        if (row, col) == KEYS.get(p.key) and p.press > .65:
-            top += 1.3
-            tone = "#F6AC56"
-        # Show each cap's front wall below the lighter typing surface.
-        b.path(f"M {left+.4} {top} L {right-.4} {top} L {right+.35} {bottom-1} "
-               f"Q {right+.45} {bottom} {right-.5} {bottom} L {left-.6} {bottom} Z", "#C6B09A")
-        b.path(f"M {left+.6} {top} L {right-.6} {top} L {right} {bottom-1.6} "
-               f"L {left-.4} {bottom-1.6} Z", tone)
-        if (row, col) == KEYS["enter"]:
-            return_legend(b, (left+right)/2, (top+bottom-1.6)/2)
-        elif (row, col) == KEYS["space"]:
-            mid = (left+right)/2
-            b.path(f"M {mid-4} {top+2.8} L {mid-4} {top+1.6} L {mid+4} {top+1.6} L {mid+4} {top+2.8}",
-                   None, "#B49665", .65)
-        elif row == 0 and 1 <= col <= 10:
-            digit_legend(b, (left+right)/2, (top+bottom-1.6)/2, col % 10)
+        tone = {"01":"#D99480","1C":"#EDB75D","39":"#F3DDAD",
+                "45":"#B0C3B2","E01C":"#DCC499"}.get(key.code)
+        if not tone: tone = "#DEDDCF" if key.code in mods else "#F7ECD8"
+        drop = .65 if key.code == pressed else 0
+        if drop: tone = "#EEAB59"
+        panel_quad(b,(a,c,d,e),"#AE9C87")
+        panel_quad(b,((a[0]+.09,a[1]+drop),(c[0]-.09,c[1]+drop),
+                      (d[0]-.12,d[1]-.87),(e[0]+.12,e[1]-.87)),tone)
+        y += (drop-.45)/2
+        if key.code == "39":
+            b.path(f"M {x-3.5} {y+.7} L {x-3.5} {y-.4} L {x+3.5} {y-.4} L {x+3.5} {y+.7}",
+                   None,"#A98D61",.44)
+        elif key.legend in arrows:
+            dx,dy = arrows[key.legend]
+            tip = (x+dx*1.6,y+dy*1.6)
+            b.path(f"M {x-dx*1.5} {y-dy*1.5} L {tip[0]} {tip[1]} "
+                   f"M {x+dy} {y-dx} L {tip[0]} {tip[1]} L {x-dy} {y+dx}",
+                   None,"#5E5349",.56)
         else:
-            b.path(f"M {right-3.9} {bottom-2.8} L {right-2.2} {bottom-2.8}", None, "#9B8A77", .7)
-    b.path("M 31 199.6 L 89 199.6", None, "#5C5050", .85)
-    b.oval(177.5, 199.5, 1, .6, "#C8A060")
+            stamp = legend_stamp(key.legend,round((w-.8)*SCALE),
+                                 round(min(h-1.0,3.6)*SCALE))
+            img.alpha_composite(stamp,(round(x*SCALE-stamp.width/2), round(y*SCALE-stamp.height/2)))
+    # Three lock indicators in the well above the number pad.
+    for offset,paint in enumerate(("#D9AD62","#8EAC9A","#69665F")):
+        x,y = project(19.3 + offset*.8,.47)
+        b.oval(x,y,.62,.47,paint)
+    b.path("M 23 201.8 L 72 201.8", None, "#675B59", .6)
+    return img
 
 
 def mouse(b):
@@ -140,6 +158,7 @@ def mouse(b):
            "C 15 187 13 183 14 178 Q 15 172 17 169 Z", SOCK)
     b.path("M 24 167.5 Q 23 171 22 176", None, SHADE, 1)
     b.oval(22.4, 172.3, 1.05, 2.45, "#C58A42")
+    b.path("M 14 178.1 L 13.7 180.7 M 13.7 174.9 L 13.6 176.9", None, "#9A826B", .8)
 
 
 def tail(b, p):
@@ -265,7 +284,16 @@ def flying_keycap(image, t, head_point):
         cap.path("M -3 8 L -2 14 M 2 8 L 3 11", None, "#A48B64", 1.2)
 
 
-def render(p, eyes=True, size=(192, 208)):
+def joints(p):
+    return {
+        "RL": ((67+p.x, 142+p.y), p.rear_l, True),
+        "RR": ((125+p.x,142+p.y), p.rear_r, True),
+        "FL": ((73+p.x,116+p.y), p.front_l, False),
+        "FR": ((119+p.x,115+p.y), p.front_r, False),
+    }
+
+
+def render(p, eyes=True, size=(192, 208), live_base=False):
     image = Image.new("RGBA", (192*SCALE, 208*SCALE))
     b = Brush(image)
     # Ground the hind paws on the far side of the keyboard. The shadow stays
@@ -276,18 +304,17 @@ def render(p, eyes=True, size=(192, 208)):
     tail(cat, p)
     torso = Brush(image, lambda x,y: cat_point(x + p.x, y + p.y))
     body(torso)
-    legs = [((67+p.x, 142+p.y), p.rear_l, True),
-            ((125+p.x, 142+p.y), p.rear_r, True)]
-    arms = [((73+p.x, 116+p.y), p.front_l, False),
-            ((119+p.x, 115+p.y), p.front_r, False)]
+    limbs = joints(p)
     reaching = []
     def paint_limb(start, end, rear):
+        if live_base:
+            return
         if cat_point(*end)[1] + 6 >= BOARD_BACK:
             reaching.append((start, end, rear))
         else:
             limb(cat, start, end, rear)
-    for leg in legs:
-        paint_limb(*leg)
+    for name in ("RL","RR"):
+        paint_limb(*limbs[name])
     angle = math.radians(p.tilt)
     co, si = math.cos(angle), math.sin(angle)
 
@@ -305,10 +332,11 @@ def render(p, eyes=True, size=(192, 208)):
         geometry.append((x, y, rx, ry))
         if eyes:
             eye(b, x, y, rx, ry, p)
-    for arm in arms:
-        paint_limb(*arm)
-    keyboard(b, p)
-    mouse(Brush(image, lambda x,y: (x-8, y+3)))
+    for name in ("FL","FR"):
+        paint_limb(*limbs[name])
+    pressed = KEYS.get(p.key) if not live_base and p.press > .65 else None
+    image.alpha_composite(keyboard(pressed, CAP_LAUNCH < p.keycap_time < CAP_LANDING))
+    mouse(Brush(image, lambda x,y: (35.9-x, 356.8-y)))
     for start, end, rear in reaching:
         limb(cat, start, end, rear)
     flying_keycap(image, p.keycap_time, head_point)

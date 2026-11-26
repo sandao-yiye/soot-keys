@@ -26,6 +26,31 @@ namespace SootKeys
             "Num +", "Num 1", "Num 2", "Num 3", "Num 0", "Num ·"
         };
 
+        internal static int PhysicalId(int scan, int flags, int vk)
+        {
+            // Pause arrives with a two-part E1 scan. Num Lock and Print Screen
+            // have several wire encodings but only one physical key each.
+            if (vk == (int)Keys.Pause || vk == (int)Keys.Cancel) return InputEdge.PauseKey;
+            if (vk == (int)Keys.NumLock) return 0x45;
+            if (vk == (int)Keys.PrintScreen) return 0xe037;
+            if (scan == 0) return 0x10000 + vk;
+            return scan | ((flags & 2) != 0 ? 0xe000 : (flags & 4) != 0 ? 0xe100 : 0);
+        }
+
+        // A key can already be held when the user switches captions back on.
+        // Recreate its legend from its physical position and the active layout.
+        internal static string NameForId(int id)
+        {
+            if (id == 0 || id >= InputEdge.FirstMouse) return null;
+            IntPtr layout = ForegroundLayout();
+            if (id >= 0x10000) return Name(0, 0, id - 0x10000, layout);
+            if (id == InputEdge.PauseKey) return "Pause";
+            int flags = (id & 0xff00) == 0xe000 ? 2 : (id & 0xff00) == 0xe100 ? 4 : 0;
+            int vk = (int)MapVirtualKeyExW((uint)id, 3, layout);
+            if (id == 0x45) vk = (int)Keys.NumLock;
+            return Name(id & 0xff, flags, vk, layout);
+        }
+
         internal static string Name(int scan, int flags, int vk, IntPtr layout)
         {
             bool extended = (flags & 6) != 0;
@@ -49,15 +74,10 @@ namespace SootKeys
                 case Keys.Back: return "退格";
                 case Keys.Tab: return "Tab";
                 case Keys.Return: return "回车";
-                case Keys.ShiftKey: return scan == 0x36 ? "右 Shift" : "左 Shift";
-                case Keys.LShiftKey: return "左 Shift";
-                case Keys.RShiftKey: return "右 Shift";
-                case Keys.ControlKey: return extended ? "右 Ctrl" : "左 Ctrl";
-                case Keys.LControlKey: return "左 Ctrl";
-                case Keys.RControlKey: return "右 Ctrl";
-                case Keys.Menu: return extended ? "右 Alt" : "左 Alt";
-                case Keys.LMenu: return "左 Alt";
-                case Keys.RMenu: return "右 Alt";
+                case Keys.ShiftKey: case Keys.LShiftKey: case Keys.RShiftKey: return "shift";
+                case Keys.ControlKey: case Keys.LControlKey: case Keys.RControlKey: return "ctrl";
+                case Keys.Menu: case Keys.LMenu: case Keys.RMenu: return "alt";
+                case Keys.Cancel:
                 case Keys.Pause: return "Pause";
                 case Keys.CapsLock: return "Caps Lock";
                 case Keys.Escape: return "Esc";
@@ -73,8 +93,7 @@ namespace SootKeys
                 case Keys.PrintScreen: return "PrtSc";
                 case Keys.Insert: return "Ins";
                 case Keys.Delete: return "Del";
-                case Keys.LWin: return "左 Win";
-                case Keys.RWin: return "右 Win";
+                case Keys.LWin: case Keys.RWin: return "win";
                 case Keys.Apps: return "菜单";
                 case Keys.Multiply: return "Num ×";
                 case Keys.Add: return "Num +";
@@ -115,18 +134,33 @@ namespace SootKeys
             try
             {
                 Marshal.Copy(new byte[64], 0, packet, 64);
+                var edges = new InputEdge[10];
+                IntPtr device = new IntPtr(123);
+                Marshal.WriteIntPtr(packet, 8, device);
+                Marshal.WriteInt16(packet, header + 4, 0x209); // left down, right up, X2 up
+                if (Native.DecodeInput(packet, 64, false, edges) != 3 ||
+                    edges[0].Device != device || !edges[0].Down || edges[0].KeyId != InputEdge.FirstMouse ||
+                    edges[1].Down || edges[1].KeyId != InputEdge.FirstMouse + 1 ||
+                    edges[2].Down || edges[2].KeyId != InputEdge.FirstMouse + 4)
+                    throw new InvalidOperationException("Grouped mouse button edges were lost.");
                 Marshal.WriteInt32(packet, 1); // RIM_TYPEKEYBOARD
                 string label;
                 if (scanA != 0 && Name((int)scanA, 0, (int)Keys.A, layout) != "A")
                     throw new InvalidOperationException("Keyboard layout letter mapping failed.");
+                if (NameForId(0x1d) != "ctrl" || NameForId(0xe01d) != "ctrl" || NameForId(0xe038) != "alt" ||
+                    NameForId(0xe01c) != "Num 回车" || NameForId(InputEdge.FirstMouse) != null)
+                    throw new InvalidOperationException("Failed to restore the held key caption.");
                 foreach (var sample in new[] {
                     new { Scan=0x39, Flags=0, Key=Keys.Space,     Label="空格" },
                     new { Scan=0x1c, Flags=0, Key=Keys.Return,    Label="回车" },
                     new { Scan=0x1c, Flags=2, Key=Keys.Return,    Label="Num 回车" },
                     new { Scan=0x4b, Flags=0, Key=Keys.Left,      Label="Num 4" },
                     new { Scan=0x4b, Flags=2, Key=Keys.Left,      Label="←" },
-                    new { Scan=0x1d, Flags=2, Key=Keys.ControlKey,Label="右 Ctrl" },
-                    new { Scan=0x36, Flags=0, Key=Keys.ShiftKey,  Label="右 Shift" },
+                    new { Scan=0x1d, Flags=2, Key=Keys.ControlKey,Label="ctrl" },
+                    new { Scan=0x1d, Flags=0, Key=Keys.ControlKey,Label="ctrl" },
+                    new { Scan=0x38, Flags=0, Key=Keys.Menu,      Label="alt" },
+                    new { Scan=0x38, Flags=2, Key=Keys.Menu,      Label="alt" },
+                    new { Scan=0x36, Flags=0, Key=Keys.ShiftKey,  Label="shift" },
                     new { Scan=0x58, Flags=0, Key=Keys.F12,       Label="F12" },
                     new { Scan=0,    Flags=0, Key=Keys.VolumeUp,  Label="音量 +" }
                 })
@@ -141,6 +175,9 @@ namespace SootKeys
                     Marshal.WriteInt16(packet, header + 2, (short)(sample.Flags | 1));
                     if (Native.Decode(packet, 64, true, out label) != Pose.Idle || label != null)
                         throw new InvalidOperationException("Key release produced a label.");
+                    if (Native.DecodeInput(packet, 64, true, edges) != 1 || edges[0].Down || edges[0].Device != device ||
+                        edges[0].KeyId != PhysicalId(sample.Scan, sample.Flags, (int)sample.Key) || edges[0].Label != null)
+                        throw new InvalidOperationException("Keyboard break lost its physical identity.");
                 }
             }
             finally { Marshal.FreeHGlobal(packet); }

@@ -6,7 +6,7 @@ $compiler = @(
 ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (!$compiler) { throw 'Install .NET Framework 4.8 before building Soot Keys.' }
 $assetPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'art/live'
-$artFiles = @('eyes.csv')
+$artFiles = @('eyes.csv','keyboard.csv','rig.csv')
 foreach ($pose in 'idle','tapLeft','tapRight','space','enter','mouse','combo') {
     foreach ($index in 0..5) { $artFiles += "$pose-$index.png" }
 }

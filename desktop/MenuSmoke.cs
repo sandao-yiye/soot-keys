@@ -34,7 +34,13 @@ namespace SootKeys
             {
                 Marshal.Copy(new byte[64], 0, packet, 64);
                 Marshal.WriteInt16(packet, 8 + 2 * IntPtr.Size + 4, 1); // RIM_TYPEMOUSE, RI_MOUSE_LEFT_BUTTON_DOWN
-                pet.ProcessInput(Native.Decode(packet, 64), screen);
+                InputEdge[] edges = new InputEdge[10];
+                if (Native.DecodeInput(packet, 64, false, edges) != 1)
+                    throw new InvalidOperationException("Expected a mouse button press.");
+                pet.ProcessInput(edges[0], screen);
+                Marshal.WriteInt16(packet, 8 + 2 * IntPtr.Size + 4, 2);
+                Native.DecodeInput(packet, 64, false, edges);
+                pet.ProcessInput(edges[0], screen);
             }
             finally { Marshal.FreeHGlobal(packet); }
         }

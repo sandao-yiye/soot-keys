@@ -13,7 +13,8 @@ namespace SootKeys
     {
         readonly Bitmap[,] bodies = new Bitmap[7, 6];
         readonly RectangleF[,,] eyes = new RectangleF[7, 6, 2];
-        readonly Font keyFont = new Font("Microsoft YaHei UI", 16, FontStyle.Bold, GraphicsUnit.Pixel);
+        readonly Font keyFont = new Font("Microsoft YaHei UI", 14.5f, FontStyle.Bold, GraphicsUnit.Pixel);
+        readonly KeyboardRig rig;
         static readonly string[] names = { "idle", "tapLeft", "tapRight", "space", "enter", "mouse", "combo" };
         static Stream Open(string file)
         {
@@ -24,6 +25,7 @@ namespace SootKeys
 
         internal Illustration()
         {
+            rig = new KeyboardRig(Open, names);
             using (StreamReader reader = new StreamReader(Open("eyes.csv")))
             {
                 reader.ReadLine();
@@ -57,7 +59,8 @@ namespace SootKeys
         static float Number(string text) { return float.Parse(text, CultureInfo.InvariantCulture); }
 
         internal void Paint(Graphics g, Size size, Pose kind, int frame, float gx, float gy, float leftLid, float rightLid,
-                            string keyLabel = null)
+                            string keyLabel = null, int physicalKey = 0, int heldMouseButtons = 0,
+                            bool keyContact = false, int captionKey = 0)
         {
             g.Clear(Color.Transparent);
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -67,23 +70,26 @@ namespace SootKeys
             g.ScaleTransform(size.Width / 192f, size.Height / 208f);
             int p = (int)kind;
             g.DrawImage(bodies[p, frame], 0, 0, 192, 208);
+            rig.Paint(g, kind, frame, physicalKey, heldMouseButtons, keyContact);
             Eye(g, eyes[p, frame, 0], gx, gy, leftLid);
             Eye(g, eyes[p, frame, 1], gx, gy, rightLid);
-            if (!string.IsNullOrEmpty(keyLabel)) DrawKeycap(g, keyLabel);
+            if (!string.IsNullOrEmpty(keyLabel))
+            {
+                RectangleF cap = rig.Bounds(captionKey != 0 ? captionKey : physicalKey);
+                DrawKeycap(g, keyLabel, cap);
+            }
             g.Restore(state);
         }
 
-        void DrawKeycap(Graphics g, string label)
+        void DrawKeycap(Graphics g, string label, RectangleF cap)
         {
-            // Use the clear space above the illustrated mouse. Two-word labels
-            // can stack on the same key so they don't cover the cat's front legs.
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             using (StringFormat format = new StringFormat(StringFormat.GenericTypographic))
             {
                 format.Alignment = StringAlignment.Center;
                 format.LineAlignment = StringAlignment.Center;
                 SizeF text = g.MeasureString(label, keyFont, PointF.Empty, format);
-                if (text.Width > 52)
+                if (text.Width > 86)
                 {
                     int split = label.IndexOf(' ');
                     if (split > 0 && split < label.Length - 1)
@@ -92,12 +98,27 @@ namespace SootKeys
                         text = g.MeasureString(label, keyFont, PointF.Empty, format);
                     }
                 }
-                // Fit uncommon long localized key names within the sprite as well.
-                float scale = Math.Min(1f, 173f / Math.Max(1f, text.Width));
-                float width = Math.Max(32, text.Width * scale + 10);
-                float height = Math.Max(23, text.Height * scale + 2);
-                float x = Math.Max(3, 26 - width / 2);
-                float y = 152 - height;
+                float scale = Math.Min(1f, 126f / Math.Max(1f, text.Width));
+                float width = Math.Max(23, text.Width * scale + 9);
+                float height = Math.Max(18, text.Height * scale);
+                // Labels for keys at the edge slide inward. Their pointer still
+                // ends at the physical key. Extra device keys have no pointer.
+                float center = cap.IsEmpty ? 26 : cap.Left + cap.Width / 2;
+                float x = Math.Max(3, Math.Min(189 - width, center - width / 2));
+                float y = (cap.IsEmpty ? 152 : Math.Min(cap.Top - 14, 151 + (cap.Top - 180) * .4f)) - height;
+                if (!cap.IsEmpty)
+                {
+                    PointF tip = new PointF(center, cap.Top + .25f);
+                    PointF tail = new PointF(Math.Max(x+4, Math.Min(x+width-4, center)), y + height + 2);
+                    using (Pen edge = new Pen(Color.FromArgb(76, 53, 41), 2.7f))
+                    using (Pen gold = new Pen(Color.FromArgb(255, 207, 116), 1.3f))
+                    {
+                        g.DrawLine(edge, tail, tip);
+                        g.DrawLine(gold, tail, tip);
+                        g.FillEllipse(Brushes.SaddleBrown, tip.X-1.6f, tip.Y-1.6f, 3.2f, 3.2f);
+                        g.FillEllipse(Brushes.PaleGoldenrod, tip.X-.9f, tip.Y-.9f, 1.8f, 1.8f);
+                    }
+                }
                 using (GraphicsPath baseShape = KeycapOutline(x, y + 1, width, height + 4))
                 using (GraphicsPath face = KeycapOutline(x + 1.3f, y, width - 2.6f, height))
                 using (Pen rim = new Pen(Color.FromArgb(255, 243, 218), 3.4f))
@@ -128,6 +149,39 @@ namespace SootKeys
             shape.AddArc(x, y + height - arc, arc, arc, 90, 90);
             shape.CloseFigure();
             return shape;
+        }
+
+        internal void VerifyKeyTargets()
+        {
+            // Both Ctrl keys share a label, but point to different keycaps.
+            var left = rig.Bounds(0x1d);
+            var right = rig.Bounds(0xe01d);
+            var mouse = rig.Bounds(0x20001);
+            if (left.IsEmpty || right.IsEmpty || mouse.IsEmpty || left.Left - right.Left < 50)
+                throw new InvalidDataException("Distinct physical Ctrl targets are missing.");
+            using (var bitmap = new Bitmap(384,416,PixelFormat.Format32bppPArgb))
+            using (var g = Graphics.FromImage(bitmap))
+            {
+                foreach (int id in new[] { 0x1d, 0xe01d })
+                {
+                    Pose pose = id == 0x1d ? Pose.Left : Pose.Right;
+                    Paint(g, bitmap.Size, pose, 3, 0, 0, 1, 1, null, id, 1, true);
+                    RectangleF cap = rig.Bounds(id);
+                    foreach (RectangleF target in new[] { cap, mouse })
+                    {
+                        int x = (int)Math.Round(2 * (target.Left + target.Width / 2));
+                        int y = (int)Math.Round(2 * (target.Top + target.Height / 2 - 2));
+                        if (bitmap.GetPixel(x,y).ToArgb() != Color.FromArgb(255,241,216).ToArgb())
+                            throw new InvalidDataException("A held mouse and Ctrl should touch both targets.");
+                    }
+                    int tipX = (int)Math.Round(2 * (cap.Left + cap.Width/2));
+                    int tipY = (int)Math.Round(2 * (cap.Top + .25f));
+                    Color before = bitmap.GetPixel(tipX,tipY);
+                    Paint(g, bitmap.Size, pose, 3, 0, 0, 1, 1, "ctrl", id, 1, true, id);
+                    if (before.ToArgb() == bitmap.GetPixel(tipX,tipY).ToArgb())
+                        throw new InvalidDataException("Key label pointer missed its Ctrl keycap.");
+                }
+            }
         }
 
         static void Eye(Graphics g, RectangleF socket, float gx, float gy, float openness)

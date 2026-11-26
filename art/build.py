@@ -9,8 +9,9 @@ import json
 
 from PIL import Image
 
-from illustration import render
-from motion import LIVE, ROWS, pose_for
+from desk import TARGETS, cat_point, paw_contact
+from illustration import joints, render
+from motion import LIVE, ROWS, Pose, pose_for
 
 ROOT = Path(__file__).resolve().parents[1]
 PET = ROOT / "pet"
@@ -20,16 +21,38 @@ PREVIEW = ROOT / "preview"
 
 def build_live():
     LIVE_DIR.mkdir(parents=True, exist_ok=True)
-    with (LIVE_DIR / "eyes.csv").open("w", encoding="utf-8", newline="") as dest:
+    with (LIVE_DIR / "keyboard.csv").open("w", encoding="utf-8", newline="") as dest:
         writer = csv.writer(dest, lineterminator="\n")
+        writer.writerow(("id","x","y","width","height"))
+        for code, geometry in TARGETS.items():
+            writer.writerow([code, *(round(v,3) for v in geometry)])
+    default_contacts = {"FL":"tapRight", "FR":"tapLeft", "RL":"enter", "RR":"space"}
+    neutral = joints(Pose())
+    with (LIVE_DIR / "eyes.csv").open("w", encoding="utf-8", newline="") as dest, \
+         (LIVE_DIR / "rig.csv").open("w", encoding="utf-8", newline="") as rig_file:
+        writer = csv.writer(dest, lineterminator="\n")
+        rig = csv.writer(rig_file, lineterminator="\n")
+        rig.writerow(("pose","frame","limb","startX","startY","endX","endY","progress"))
         writer.writerow(("pose", "frame", "leftX", "leftY", "leftRx", "leftRy",
                          "rightX", "rightY", "rightRx", "rightRy"))
         for name in LIVE:
             for i in range(6):
                 p = pose_for(name, i / (6 if name == "idle" else 5))
-                image, geometry = render(p, eyes=False)
+                # Two device pixels per design pixel keep the legends crisp at
+                # 150–200% Windows scaling; all joint geometry stays in design units.
+                image, geometry = render(p, eyes=False, size=(384,416), live_base=True)
                 image.save(LIVE_DIR / f"{name}-{i}.png", optimize=True)
                 writer.writerow([name, i, *(round(v, 3) for eye in geometry for v in eye)])
+                for limb, (start, end, _) in joints(p).items():
+                    action = "mouse" if name == "mouse" and limb == "FL" else default_contacts[limb]
+                    progress = 0
+                    if name in (action,"combo"):
+                        home = neutral[limb][1]
+                        target = paw_contact(action)
+                        # The vertical component of the interpolated strike is monotonic.
+                        progress = (end[1] - home[1]) / (target[1] - home[1])
+                    rig.writerow([name,i,limb, *(round(v,4) for v in (
+                        *cat_point(*start), *cat_point(*end), progress))])
 
 
 def build_native():

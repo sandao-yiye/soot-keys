@@ -26,18 +26,21 @@ namespace SootKeys
         bool refreshing, nativeAligned;
         Point? initialNativeAnchor;
         readonly IntPtr scratch = Marshal.AllocHGlobal(64);
+        readonly InputEdge[] edges = new InputEdge[10];
         Surface surface;
         PointF position;
         Point dragOffset;
         double lastTick;
         const double KeyNameSeconds = 1.0;
         string keyName;
+        int captionKey;
         double keyNameUntil;
         bool listening, mouseListening, grabbed, dragging, dirty = true;
         Point pressPoint;
         int paints;
         Pose lastPose;
         int lastFrame;
+        int lastActionKey;
         float lastX, lastY, lastLeft, lastRight;
 
         internal PetWindow(Illustration images, PetSettings settings, bool test, bool quiet = false, bool linked = false)
@@ -119,8 +122,6 @@ namespace SootKeys
                 if (refreshing) return;
                 preferences.Paused = pause.Checked;
                 SetListening(!pause.Checked);
-                motion.Reset(clock.Elapsed.TotalSeconds);
-                dirty = true;
                 SavePreferences();
             };
             follow.CheckedChanged += delegate
@@ -133,7 +134,8 @@ namespace SootKeys
             {
                 if (refreshing) return;
                 preferences.ShowKeyName = keyNames.Checked;
-                if (!keyNames.Checked) ClearKeyName();
+                if (!keyNames.Checked) { ClearKeyName(); motion.ClearLabels(); }
+                else RestoreHeldCaption();
                 SavePreferences();
             };
             RefreshMenu();
@@ -175,7 +177,7 @@ namespace SootKeys
             refreshing = true;
             follow.Checked = preferences.Follow;
             keyNames.Checked = preferences.ShowKeyName;
-            if (!preferences.ShowKeyName) ClearKeyName();
+            if (!preferences.ShowKeyName) { ClearKeyName(); motion.ClearLabels(); }
             pause.Checked = preferences.Paused;
             for (int i = 0; i < levels.Length; i++) levels[i].Checked = i == preferences.Level;
             refreshing = false;
@@ -243,11 +245,16 @@ namespace SootKeys
 
         void SetListening(bool enabled)
         {
-            if (!enabled) ClearKeyName();
             if (enabled != listening)
             {
                 Native.Listen(Handle, 6, enabled);
                 listening = enabled;
+                if (!enabled)
+                {
+                    motion.Reset(clock.Elapsed.TotalSeconds);
+                    ClearKeyName();
+                    dirty = true;
+                }
             }
             SetMouseListening(enabled || menu.Visible);
         }
@@ -343,16 +350,30 @@ namespace SootKeys
             if (listening) motion.Look(cursor.X-position.X-size.Width*.50, cursor.Y-position.Y-size.Height*.32, elapsed);
             float gx = (float)Math.Round(motion.GazeX*80)/80, gy = (float)Math.Round(motion.GazeY*80)/80;
             float blink = motion.Blink(now), right = motion.RightLid(now, blink);
-            bool repaint = dirty || pose != lastPose || frame != lastFrame || gx != lastX || gy != lastY
+            int actionKey = motion.ActionKeyId;
+            InputEdge heldKey = motion.HeldKey;
+            int mouseButtons = motion.HeldMouseButtons;
+            if (pose == Pose.Mouse && mouseButtons != 0 && heldKey.KeyId != 0)
+            {
+                // The mouse paw stays down while the keyboard paw keeps its own target.
+                pose = heldKey.Pose;
+                frame = 3;
+                actionKey = heldKey.KeyId;
+            }
+            bool contact = heldKey.KeyId != 0 && heldKey.KeyId == actionKey;
+            if (contact && captionKey != heldKey.KeyId) RestoreHeldCaption();
+            bool repaint = dirty || actionKey != lastActionKey || pose != lastPose || frame != lastFrame || gx != lastX || gy != lastY
                            || blink != lastLeft || right != lastRight;
             if (repaint)
             {
-                art.Paint(surface.Canvas, size, pose, frame, gx, gy, blink, right, keyName);
+                art.Paint(surface.Canvas, size, pose, frame, gx, gy, blink, right,
+                          keyName, actionKey, mouseButtons, contact, captionKey);
                 paints++;
             }
             if (repaint || Point.Round(position) != Point.Round(oldPosition))
                 surface.Present(Handle, Point.Round(position));
             dirty = false;
+            lastActionKey = actionKey;
             lastPose = pose; lastFrame = frame; lastX = gx; lastY = gy;
             lastLeft = blink; lastRight = right;
             if (smokeTest && now >= .9)
@@ -386,17 +407,7 @@ namespace SootKeys
                 }
                 if (Math.Abs(AnchorPoint().Y - anchor.Y) > 1)
                     throw new InvalidOperationException("Resizing moved the bottom anchor.");
-                ProcessInput(Pose.Left, Point.Empty, "A");
-                ProcessInput(Pose.Right, Point.Empty, "F12");
-                if (keyName != "F12") throw new InvalidOperationException("Latest key did not replace the previous caption.");
-                keyNames.PerformClick();
-                ProcessInput(Pose.Left, Point.Empty, "A");
-                if (keyName != null || preferences.ShowKeyName) throw new InvalidOperationException("Disabled key caption remained visible.");
-                keyNames.PerformClick();
-                ProcessInput(Pose.Left, Point.Empty, "A");
-                pause.Checked = true;
-                if (keyName != null) throw new InvalidOperationException("Pausing left a key caption visible.");
-                pause.Checked = false;
+                VerifyHeldCaptions();
                 Close();
             }
         }
@@ -405,21 +416,69 @@ namespace SootKeys
         {
             if (keyName == null) return;
             keyName = null;
+            captionKey = 0;
             dirty = true;
         }
 
-        internal void ProcessInput(Pose pose, Point screen, string pressedKey = null)
+        void VerifyHeldCaptions()
         {
-            if (pose == Pose.Mouse) menu.DismissOutside(screen);
-            if (!listening || pose == Pose.Idle) return;
+            IntPtr first = new IntPtr(1), second = new IntPtr(2);
+            var left = new InputEdge(first, 0x1d, Pose.Left, true, "ctrl");
+            var right = new InputEdge(second, 0xe01d, Pose.Right, true, "ctrl");
+            ProcessInput(left, Point.Empty);
+            ProcessInput(right, Point.Empty);
+            if (keyName != "ctrl" || captionKey != right.KeyId || !double.IsPositiveInfinity(keyNameUntil))
+                throw new InvalidOperationException("Held right ctrl needs its own anchor and a persistent caption.");
+            System.Threading.Thread.Sleep(180); // Hold past the contact part of a tap.
+            ProcessInput(new InputEdge(second, right.KeyId, Pose.Right, false, null), Point.Empty);
+            if (captionKey != left.KeyId || !double.IsPositiveInfinity(keyNameUntil))
+                throw new InvalidOperationException("Releasing right ctrl lost the still-held left ctrl.");
+            ProcessInput(new InputEdge(first, left.KeyId, Pose.Left, false, null), Point.Empty);
+            if (keyName != "ctrl" || double.IsPositiveInfinity(keyNameUntil))
+                throw new InvalidOperationException("Releasing the last key needs to start caption expiry.");
+            keyNames.PerformClick();
+            ProcessInput(new InputEdge(first, left.KeyId, Pose.Left, true, null), Point.Empty);
+            if (keyName != null || preferences.ShowKeyName) throw new InvalidOperationException("Key caption toggle failed.");
+            keyNames.PerformClick();
+            if (keyName != "ctrl" || captionKey != left.KeyId)
+                throw new InvalidOperationException("Re-enabling captions did not restore the still-held key.");
+            pause.Checked = true;
+            if (keyName != null || motion.HeldKey.KeyId != 0 || motion.HeldMouseButtons != 0)
+                throw new InvalidOperationException("Pausing left held inputs visible.");
+            pause.Checked = false;
+        }
+
+        void SetKeyName(InputEdge key, double until)
+        {
+            if (String.IsNullOrEmpty(key.Label)) { ClearKeyName(); return; }
+            dirty |= keyName != key.Label || captionKey != key.KeyId;
+            keyName = key.Label;
+            captionKey = key.KeyId;
+            keyNameUntil = until;
+        }
+
+        void RestoreHeldCaption()
+        {
+            InputEdge key = motion.HeldKey;
+            if (!preferences.ShowKeyName || key.KeyId == 0) return;
+            if (String.IsNullOrEmpty(key.Label))
+                key = new InputEdge(key.Device, key.KeyId, key.Pose, true, KeyboardKey.NameForId(key.KeyId));
+            SetKeyName(key, double.PositiveInfinity);
+        }
+
+        internal void ProcessInput(InputEdge edge, Point screen)
+        {
+            if (edge.Down && edge.KeyId == InputEdge.FirstMouse) menu.DismissOutside(screen);
+            if (!listening) return;
             double now = clock.Elapsed.TotalSeconds;
-            motion.Strike(pose, now);
-            if (pose != Pose.Mouse && preferences.ShowKeyName && !String.IsNullOrEmpty(pressedKey))
-            {
-                dirty |= keyName != pressedKey;
-                keyName = pressedKey;
-                keyNameUntil = now + KeyNameSeconds;
-            }
+            if (!motion.Apply(edge, now)) return;
+            dirty = true;
+            if (!preferences.ShowKeyName || edge.Pose == Pose.Mouse) return;
+            if (edge.Down)
+                SetKeyName(edge, motion.HeldKey.KeyId == edge.KeyId ? double.PositiveInfinity : now + KeyNameSeconds);
+            else if (motion.HeldKey.KeyId != 0 && (motion.HeldKey.KeyId == captionKey || motion.ActionKeyId != captionKey))
+                RestoreHeldCaption();
+            else if (keyName != null) keyNameUntil = now + KeyNameSeconds;
         }
 
         protected override void WndProc(ref Message m)
@@ -433,10 +492,24 @@ namespace SootKeys
             }
             if (m.Msg == Native.WmInput && (listening || mouseListening))
             {
-                string keyLabel;
-                Pose pose = Native.ReadPose(m.LParam, scratch, listening && preferences.ShowKeyName, out keyLabel);
-                if (pose != Pose.Idle)
-                    ProcessInput(pose, pose == Pose.Mouse ? Native.MessagePoint() : Point.Empty, keyLabel);
+                int count = Native.ReadInput(m.LParam, scratch, listening && preferences.ShowKeyName, edges);
+                for (int i = 0; i < count; i++)
+                {
+                    InputEdge edge = edges[i];
+                    edges[i] = default(InputEdge);
+                    ProcessInput(edge, edge.Pose == Pose.Mouse && edge.Down ? Native.MessagePoint() : Point.Empty);
+                }
+            }
+            if (m.Msg == 0x00fe && m.WParam.ToInt64() == 2 && listening) // WM_INPUT_DEVICE_CHANGE, GIDC_REMOVAL
+            {
+                InputEdge previous = motion.HeldKey;
+                motion.RemoveDevice(m.LParam, clock.Elapsed.TotalSeconds);
+                if (previous.KeyId != 0 && previous.Device == m.LParam)
+                {
+                    ClearKeyName();
+                    RestoreHeldCaption();
+                }
+                dirty = true;
             }
             base.WndProc(ref m);
         }

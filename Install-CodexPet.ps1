@@ -72,6 +72,7 @@ function Update-PublishedSprite([string] $Directory) {
     $publishedHashes = @(
         '3DFA5888DF9F1B64D4FE5207F6EB0300D29AA1FB8D667BF06F84FA5C5E955BB0' # v1.0 through v1.1.1
         '31D042532DE867BC791AD74AF68C4DBFE237B806F95638CB641DF9EE9375D9D5' # v1.2.0
+        '351FE661C3C4503B86FA286B5EA58A2578666E84562AC665CB41149A9B00FB44' # v1.3.0
     )
     if ($current -notin $publishedHashes) {
         throw "Artwork at '$installed' has been customized or belongs to a newer release. Back it up before installing."

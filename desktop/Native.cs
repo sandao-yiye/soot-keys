@@ -71,7 +71,7 @@ namespace SootKeys
         {
             Device device = new Device
             {
-                Page = 1, Usage = usage, Flags = enable ? 0x100u : 1u,
+                Page = 1, Usage = usage, Flags = enable ? 0x2100u : 1u, // INPUTSINK | DEVNOTIFY
                 Window = enable ? window : IntPtr.Zero
             };
             if (!RegisterRawInputDevices(new[] { device }, 1, (uint)Marshal.SizeOf(typeof(Device))))
@@ -85,6 +85,12 @@ namespace SootKeys
             uint received = GetRawInputData(packet, 0x10000003, scratch, ref bytes, (uint)HeaderBytes);
             return Decode(scratch, received, showKeyName, out keyLabel);
         }
+        internal static int ReadInput(IntPtr packet, IntPtr scratch, bool showKeyName, InputEdge[] edges)
+        {
+            uint bytes = 64;
+            uint received = GetRawInputData(packet, 0x10000003, scratch, ref bytes, (uint)HeaderBytes);
+            return DecodeInput(scratch, received, showKeyName, edges);
+        }
 
         internal static Pose Decode(IntPtr scratch, uint received)
         {
@@ -94,24 +100,46 @@ namespace SootKeys
 
         internal static Pose Decode(IntPtr scratch, uint received, bool showKeyName, out string keyLabel)
         {
+            var edges = new InputEdge[10];
             keyLabel = null;
-            if (received == uint.MaxValue || received < HeaderBytes + 8) return Pose.Idle;
+            int count = DecodeInput(scratch, received, showKeyName, edges);
+            for (int i = 0; i < count; i++)
+            {
+                if (!edges[i].Down) continue;
+                keyLabel = edges[i].Label;
+                return edges[i].Pose;
+            }
+            return Pose.Idle;
+        }
+
+        internal static int DecodeInput(IntPtr scratch, uint received, bool showKeyName, InputEdge[] edges)
+        {
+            if (received == uint.MaxValue || received < HeaderBytes + 8) return 0;
             int type = Marshal.ReadInt32(scratch);
+            IntPtr device = Marshal.ReadIntPtr(scratch, 8);
             IntPtr data = IntPtr.Add(scratch, HeaderBytes);
             if (type == 0)
             {
-                return (Marshal.ReadInt16(data, 4) & 1) != 0 ? Pose.Mouse : Pose.Idle;
+                int buttons = Marshal.ReadInt16(data, 4) & 0x3ff;
+                int count = 0;
+                for (int bit = 0; buttons != 0; bit++, buttons >>= 1)
+                    if ((buttons & 1) != 0)
+                        edges[count++] = new InputEdge(device, InputEdge.FirstMouse + bit/2, Pose.Mouse, bit%2 == 0, null);
+                return count;
             }
-            if (type != 1 || received < HeaderBytes + 16) return Pose.Idle;
+            if (type != 1 || received < HeaderBytes + 16) return 0;
             int scan = Marshal.ReadInt16(data, 0) & 0xffff, flags = Marshal.ReadInt16(data, 2);
             int vk = Marshal.ReadInt16(data, 6) & 0xffff;
-            if ((flags & 1) != 0 || scan == 0xff || vk >= 0xff || vk == 0xe7 ||
-                ((flags & 2) != 0 && (scan == 0x2a || scan == 0x36))) return Pose.Idle;
+            if (scan >= 0xff || vk >= 0xff || vk == 0xe7 ||
+                ((flags & 2) != 0 && (scan == 0x2a || scan == 0x36))) return 0;
             // Some multimedia buttons have a virtual key but no make code.
-            Pose pose = scan == 0 && vk != 0 ? Pose.Right : KeyboardPose(scan, flags);
-            if (showKeyName && pose != Pose.Idle)
-                keyLabel = KeyboardKey.Name(scan, flags, vk, KeyboardKey.ForegroundLayout());
-            return pose;
+            Pose pose = scan == 0 && vk != 0 ? Pose.Right : KeyboardPose(scan, flags & ~1);
+            if (pose == Pose.Idle) return 0;
+            bool down = (flags & 1) == 0;
+            int id = KeyboardKey.PhysicalId(scan, flags, vk);
+            string label = down && showKeyName ? KeyboardKey.Name(scan, flags, vk, KeyboardKey.ForegroundLayout()) : null;
+            edges[0] = new InputEdge(device, id, pose, down, label);
+            return 1;
         }
 
         internal static Pose KeyboardPose(int scan, int flags)

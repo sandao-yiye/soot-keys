@@ -17,7 +17,7 @@ try {
     $script = Join-Path $package 'Install-CodexPet.ps1'
     $sheet = Join-Path $dest 'spritesheet.webp'
     $newHash = (Get-FileHash -LiteralPath (Join-Path $package 'pet\spritesheet.webp')).Hash
-    foreach ($tag in 'v1.1.1', 'v1.2.0') {
+    foreach ($tag in 'v1.1.1', 'v1.2.0', 'v1.3.0') {
         $oldZip = Join-Path $fixture "$tag.zip"
         & git -C $repo archive --format=zip -o $oldZip ("${tag}:pet")
         if ($LASTEXITCODE -ne 0) { throw "Artwork fixture unavailable for $tag." }
