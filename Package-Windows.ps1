@@ -21,6 +21,7 @@ $entries = [ordered]@{
     'pet/pet.json' = 'pet/pet.json'
     'pet/spritesheet.webp' = 'pet/spritesheet.webp'
     'preview/soot-keys.gif' = 'preview/soot-keys.gif'
+    'preview/key-display.png' = 'preview/key-display.png'
     'README.md' = 'README.md'
     'LICENSE' = 'LICENSE'
 }

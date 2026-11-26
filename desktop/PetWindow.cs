@@ -16,6 +16,7 @@ namespace SootKeys
         readonly PetMenu menu = new PetMenu();
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ToolStripMenuItem follow = new ToolStripMenuItem("整只猫跟随鼠标");
+        readonly ToolStripMenuItem keyNames = new ToolStripMenuItem("显示按键名称");
         readonly ToolStripMenuItem pause = new ToolStripMenuItem("暂停键鼠互动");
         readonly bool smokeTest;
         readonly bool quiet;
@@ -29,6 +30,9 @@ namespace SootKeys
         PointF position;
         Point dragOffset;
         double lastTick;
+        const double KeyNameSeconds = 1.0;
+        string keyName;
+        double keyNameUntil;
         bool listening, mouseListening, grabbed, dragging, dirty = true;
         Point pressPoint;
         int paints;
@@ -53,6 +57,7 @@ namespace SootKeys
             Rectangle desk = Screen.FromPoint(Cursor.Position).WorkingArea;
             Location = new Point(desk.Right - Width - 24, desk.Bottom - Height - 20);
             follow.CheckOnClick = true;
+            keyNames.CheckOnClick = true;
             pause.CheckOnClick = true;
             menu.Items.Add("打开 Codex", null, delegate
             {
@@ -105,6 +110,7 @@ namespace SootKeys
             menu.Items.Add(actions);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(follow);
+            menu.Items.Add(keyNames);
             menu.Items.Add(pause);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(linked ? "暂时收起墨爪" : "退出墨爪", null, delegate { Close(); });
@@ -121,6 +127,13 @@ namespace SootKeys
             {
                 if (refreshing) return;
                 preferences.Follow = follow.Checked;
+                SavePreferences();
+            };
+            keyNames.CheckedChanged += delegate
+            {
+                if (refreshing) return;
+                preferences.ShowKeyName = keyNames.Checked;
+                if (!keyNames.Checked) ClearKeyName();
                 SavePreferences();
             };
             RefreshMenu();
@@ -161,6 +174,8 @@ namespace SootKeys
         {
             refreshing = true;
             follow.Checked = preferences.Follow;
+            keyNames.Checked = preferences.ShowKeyName;
+            if (!preferences.ShowKeyName) ClearKeyName();
             pause.Checked = preferences.Paused;
             for (int i = 0; i < levels.Length; i++) levels[i].Checked = i == preferences.Level;
             refreshing = false;
@@ -228,6 +243,7 @@ namespace SootKeys
 
         void SetListening(bool enabled)
         {
+            if (!enabled) ClearKeyName();
             if (enabled != listening)
             {
                 Native.Listen(Handle, 6, enabled);
@@ -314,6 +330,7 @@ namespace SootKeys
         {
             EnsureSurface();
             double now = clock.Elapsed.TotalSeconds;
+            if (keyName != null && now >= keyNameUntil) ClearKeyName();
             double elapsed = Math.Min(.1, Math.Max(0, now-lastTick));
             lastTick = now;
             Point cursor = listening ? Cursor.Position : Point.Empty;
@@ -330,7 +347,7 @@ namespace SootKeys
                            || blink != lastLeft || right != lastRight;
             if (repaint)
             {
-                art.Paint(surface.Canvas, size, pose, frame, gx, gy, blink, right);
+                art.Paint(surface.Canvas, size, pose, frame, gx, gy, blink, right, keyName);
                 paints++;
             }
             if (repaint || Point.Round(position) != Point.Round(oldPosition))
@@ -369,16 +386,40 @@ namespace SootKeys
                 }
                 if (Math.Abs(AnchorPoint().Y - anchor.Y) > 1)
                     throw new InvalidOperationException("Resizing moved the bottom anchor.");
+                ProcessInput(Pose.Left, Point.Empty, "A");
+                ProcessInput(Pose.Right, Point.Empty, "F12");
+                if (keyName != "F12") throw new InvalidOperationException("Latest key did not replace the previous caption.");
+                keyNames.PerformClick();
+                ProcessInput(Pose.Left, Point.Empty, "A");
+                if (keyName != null || preferences.ShowKeyName) throw new InvalidOperationException("Disabled key caption remained visible.");
+                keyNames.PerformClick();
+                ProcessInput(Pose.Left, Point.Empty, "A");
                 pause.Checked = true;
+                if (keyName != null) throw new InvalidOperationException("Pausing left a key caption visible.");
                 pause.Checked = false;
                 Close();
             }
         }
 
-        internal void ProcessInput(Pose pose, Point screen)
+        void ClearKeyName()
+        {
+            if (keyName == null) return;
+            keyName = null;
+            dirty = true;
+        }
+
+        internal void ProcessInput(Pose pose, Point screen, string pressedKey = null)
         {
             if (pose == Pose.Mouse) menu.DismissOutside(screen);
-            if (listening && pose != Pose.Idle) motion.Strike(pose, clock.Elapsed.TotalSeconds);
+            if (!listening || pose == Pose.Idle) return;
+            double now = clock.Elapsed.TotalSeconds;
+            motion.Strike(pose, now);
+            if (pose != Pose.Mouse && preferences.ShowKeyName && !String.IsNullOrEmpty(pressedKey))
+            {
+                dirty |= keyName != pressedKey;
+                keyName = pressedKey;
+                keyNameUntil = now + KeyNameSeconds;
+            }
         }
 
         protected override void WndProc(ref Message m)
@@ -392,9 +433,10 @@ namespace SootKeys
             }
             if (m.Msg == Native.WmInput && (listening || mouseListening))
             {
-                Pose pose = Native.ReadPose(m.LParam, scratch);
+                string keyLabel;
+                Pose pose = Native.ReadPose(m.LParam, scratch, listening && preferences.ShowKeyName, out keyLabel);
                 if (pose != Pose.Idle)
-                    ProcessInput(pose, pose == Pose.Mouse ? Native.MessagePoint() : Point.Empty);
+                    ProcessInput(pose, pose == Pose.Mouse ? Native.MessagePoint() : Point.Empty, keyLabel);
             }
             base.WndProc(ref m);
         }

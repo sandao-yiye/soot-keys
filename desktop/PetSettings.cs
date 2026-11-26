@@ -13,6 +13,7 @@ namespace SootKeys
         internal const int Standard = 1;
         internal int Level = Standard;
         internal bool Follow, Paused;
+        internal bool ShowKeyName = true;
         internal Point? Anchor;
         readonly string file;
         internal string TestDirectory { get { return file == null ? null : Path.GetDirectoryName(file); } }
@@ -34,7 +35,7 @@ namespace SootKeys
         internal void Reload()
         {
             int level = Standard, x = 0, y = 0;
-            bool follow = false, paused = false, hasX = false, hasY = false;
+            bool follow = false, paused = false, showKeyName = true, hasX = false, hasY = false;
             if (file != null && File.Exists(file))
             {
                 try
@@ -51,6 +52,10 @@ namespace SootKeys
                                 break;
                             case "follow": bool.TryParse(parts[1], out follow); break;
                             case "paused": bool.TryParse(parts[1], out paused); break;
+                            case "showKeyName":
+                                bool enabled;
+                                if (bool.TryParse(parts[1], out enabled)) showKeyName = enabled;
+                                break;
                             case "anchorX": hasX = int.TryParse(parts[1], out x); break;
                             case "anchorY": hasY = int.TryParse(parts[1], out y); break;
                         }
@@ -59,7 +64,7 @@ namespace SootKeys
                 catch (IOException) { return; }
                 catch (UnauthorizedAccessException) { return; }
             }
-            Level = level; Follow = follow; Paused = paused;
+            Level = level; Follow = follow; Paused = paused; ShowKeyName = showKeyName;
             Anchor = hasX && hasY ? (Point?)new Point(x, y) : null;
         }
 
@@ -76,6 +81,7 @@ namespace SootKeys
                     writer.WriteLine("size=" + Level);
                     writer.WriteLine("follow=" + Follow);
                     writer.WriteLine("paused=" + Paused);
+                    writer.WriteLine("showKeyName=" + ShowKeyName);
                     if (Anchor.HasValue)
                     {
                         writer.WriteLine("anchorX=" + Anchor.Value.X.ToString(CultureInfo.InvariantCulture));

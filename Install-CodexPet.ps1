@@ -69,8 +69,11 @@ function Update-PublishedSprite([string] $Directory) {
     $installed = Join-Path $Directory 'spritesheet.webp'
     $current = (Get-FileHash -LiteralPath $installed).Hash
     if ($current -eq $newSpriteHash) { return }
-    # The art distributed in v1.0 through v1.1.1 has one shared digest.
-    if ($current -ne '3DFA5888DF9F1B64D4FE5207F6EB0300D29AA1FB8D667BF06F84FA5C5E955BB0') {
+    $publishedHashes = @(
+        '3DFA5888DF9F1B64D4FE5207F6EB0300D29AA1FB8D667BF06F84FA5C5E955BB0' # v1.0 through v1.1.1
+        '31D042532DE867BC791AD74AF68C4DBFE237B806F95638CB641DF9EE9375D9D5' # v1.2.0
+    )
+    if ($current -notin $publishedHashes) {
         throw "Artwork at '$installed' has been customized or belongs to a newer release. Back it up before installing."
     }
     $staged = Join-Path $Directory ([IO.Path]::GetRandomFileName())

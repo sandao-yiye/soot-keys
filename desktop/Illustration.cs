@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -12,6 +13,7 @@ namespace SootKeys
     {
         readonly Bitmap[,] bodies = new Bitmap[7, 6];
         readonly RectangleF[,,] eyes = new RectangleF[7, 6, 2];
+        readonly Font keyFont = new Font("Microsoft YaHei UI", 16, FontStyle.Bold, GraphicsUnit.Pixel);
         static readonly string[] names = { "idle", "tapLeft", "tapRight", "space", "enter", "mouse", "combo" };
         static Stream Open(string file)
         {
@@ -54,7 +56,8 @@ namespace SootKeys
 
         static float Number(string text) { return float.Parse(text, CultureInfo.InvariantCulture); }
 
-        internal void Paint(Graphics g, Size size, Pose kind, int frame, float gx, float gy, float leftLid, float rightLid)
+        internal void Paint(Graphics g, Size size, Pose kind, int frame, float gx, float gy, float leftLid, float rightLid,
+                            string keyLabel = null)
         {
             g.Clear(Color.Transparent);
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -66,7 +69,65 @@ namespace SootKeys
             g.DrawImage(bodies[p, frame], 0, 0, 192, 208);
             Eye(g, eyes[p, frame, 0], gx, gy, leftLid);
             Eye(g, eyes[p, frame, 1], gx, gy, rightLid);
+            if (!string.IsNullOrEmpty(keyLabel)) DrawKeycap(g, keyLabel);
             g.Restore(state);
+        }
+
+        void DrawKeycap(Graphics g, string label)
+        {
+            // Use the clear space above the illustrated mouse. Two-word labels
+            // can stack on the same key so they don't cover the cat's front legs.
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            using (StringFormat format = new StringFormat(StringFormat.GenericTypographic))
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                SizeF text = g.MeasureString(label, keyFont, PointF.Empty, format);
+                if (text.Width > 52)
+                {
+                    int split = label.IndexOf(' ');
+                    if (split > 0 && split < label.Length - 1)
+                    {
+                        label = label.Substring(0, split) + "\n" + label.Substring(split + 1);
+                        text = g.MeasureString(label, keyFont, PointF.Empty, format);
+                    }
+                }
+                // Fit uncommon long localized key names within the sprite as well.
+                float scale = Math.Min(1f, 173f / Math.Max(1f, text.Width));
+                float width = Math.Max(32, text.Width * scale + 10);
+                float height = Math.Max(23, text.Height * scale + 2);
+                float x = Math.Max(3, 26 - width / 2);
+                float y = 152 - height;
+                using (GraphicsPath baseShape = KeycapOutline(x, y + 1, width, height + 4))
+                using (GraphicsPath face = KeycapOutline(x + 1.3f, y, width - 2.6f, height))
+                using (Pen rim = new Pen(Color.FromArgb(255, 243, 218), 3.4f))
+                using (Pen border = new Pen(Color.FromArgb(53, 42, 39), 1.45f))
+                using (Brush wall = new SolidBrush(Color.FromArgb(224, 164, 85)))
+                using (Brush cream = new SolidBrush(Color.FromArgb(255, 243, 216)))
+                using (Brush ink = new SolidBrush(Color.FromArgb(53, 42, 39)))
+                {
+                    g.DrawPath(rim, baseShape);
+                    g.FillPath(wall, baseShape);
+                    g.DrawPath(border, baseShape);
+                    g.FillPath(cream, face);
+                    g.DrawPath(border, face);
+                    g.TranslateTransform(x + width / 2, y + height / 2);
+                    g.ScaleTransform(scale, scale);
+                    g.DrawString(label, keyFont, ink, PointF.Empty, format);
+                }
+            }
+        }
+
+        static GraphicsPath KeycapOutline(float x, float y, float width, float height)
+        {
+            const float arc = 8;
+            GraphicsPath shape = new GraphicsPath();
+            shape.AddArc(x, y, arc, arc, 180, 90);
+            shape.AddArc(x + width - arc, y, arc, arc, 270, 90);
+            shape.AddArc(x + width - arc, y + height - arc, arc, arc, 0, 90);
+            shape.AddArc(x, y + height - arc, arc, arc, 90, 90);
+            shape.CloseFigure();
+            return shape;
         }
 
         static void Eye(Graphics g, RectangleF socket, float gx, float gy, float openness)
@@ -101,6 +162,7 @@ namespace SootKeys
 
         public void Dispose()
         {
+            keyFont.Dispose();
             foreach (Bitmap frame in bodies) if (frame != null) frame.Dispose();
         }
     }

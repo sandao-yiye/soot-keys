@@ -78,18 +78,23 @@ namespace SootKeys
                 throw new Win32Exception();
         }
 
-        // Inspect only make/break, physical side, Space/Enter and the mouse button edge.
-        // The animation receives a pose. No text translation or event history is needed.
         static readonly int HeaderBytes = Marshal.SizeOf(typeof(RawHeader));
-        internal static Pose ReadPose(IntPtr packet, IntPtr scratch)
+        internal static Pose ReadPose(IntPtr packet, IntPtr scratch, bool showKeyName, out string keyLabel)
         {
             uint bytes = 64;
             uint received = GetRawInputData(packet, 0x10000003, scratch, ref bytes, (uint)HeaderBytes);
-            return Decode(scratch, received);
+            return Decode(scratch, received, showKeyName, out keyLabel);
         }
 
         internal static Pose Decode(IntPtr scratch, uint received)
         {
+            string ignored;
+            return Decode(scratch, received, false, out ignored);
+        }
+
+        internal static Pose Decode(IntPtr scratch, uint received, bool showKeyName, out string keyLabel)
+        {
+            keyLabel = null;
             if (received == uint.MaxValue || received < HeaderBytes + 8) return Pose.Idle;
             int type = Marshal.ReadInt32(scratch);
             IntPtr data = IntPtr.Add(scratch, HeaderBytes);
@@ -99,7 +104,14 @@ namespace SootKeys
             }
             if (type != 1 || received < HeaderBytes + 16) return Pose.Idle;
             int scan = Marshal.ReadInt16(data, 0) & 0xffff, flags = Marshal.ReadInt16(data, 2);
-            return KeyboardPose(scan, flags);
+            int vk = Marshal.ReadInt16(data, 6) & 0xffff;
+            if ((flags & 1) != 0 || scan == 0xff || vk >= 0xff || vk == 0xe7 ||
+                ((flags & 2) != 0 && (scan == 0x2a || scan == 0x36))) return Pose.Idle;
+            // Some multimedia buttons have a virtual key but no make code.
+            Pose pose = scan == 0 && vk != 0 ? Pose.Right : KeyboardPose(scan, flags);
+            if (showKeyName && pose != Pose.Idle)
+                keyLabel = KeyboardKey.Name(scan, flags, vk, KeyboardKey.ForegroundLayout());
+            return pose;
         }
 
         internal static Pose KeyboardPose(int scan, int flags)

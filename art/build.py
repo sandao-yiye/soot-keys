@@ -69,7 +69,7 @@ def build_preview():
     frames = []
     durations = []
     for name, count, ms in [("idle", 16, 105), ("tapLeft", 7, 45), ("tapRight", 7, 45),
-                            ("space", 12, 65), ("mouse", 12, 75), ("combo", 16, 80),
+                            ("space", 12, 65), ("enter", 10, 55), ("mouse", 12, 75), ("combo", 16, 80),
                             ("look", 20, 70), ("wave", 10, 90)]:
         for i in range(count):
             t = i / (count if name in ("idle", "look", "wave") else count-1)

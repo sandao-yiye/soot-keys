@@ -4,8 +4,7 @@ CAT_SCALE = .89
 CAT_ORIGIN = (12, 2)
 BOARD_BACK = 160
 MOUSE_WHEEL = (14.4, 175.3)
-KEYS = {"tapLeft": (2, 2), "tapRight": (2, 7), "space": (3, 3),
-        "enter": (2, 9), "combo": (3, 3)}
+KEYS = {"tapLeft": (2, 2), "tapRight": (2, 7), "space": (3, 3), "enter": (2, 9)}
 
 
 def cat_point(x, y):
@@ -17,18 +16,26 @@ def cat_coordinates(screen_point):
 
 
 def keys():
-    # Nearer rows are both wider and deeper. All contacts and the flying cap
-    # use these coordinates, including when the rig is rendered at another size.
-    rows = (
-        (163, 5.2, 42, 169, [1] * 12),
-        (170, 5.9, 39, 172, [1.35] + [1] * 9 + [1.5]),
-        (178, 6.2, 35, 175.5, [1.6] + [1] * 8 + [2.1]),
-        (186.5, 6.9, 31.5, 179, [1.2, 1.2, 1.2, 5.5, 1.1, 1.1, 1.2]),
+    # Logical indices are from the typist's (cat's) seat. Both axes run
+    # opposite the screen axes. Keep the case and near-side cap walls in
+    # camera perspective while placing rows and legends on the rotated deck.
+    widths_by_row = (
+        [1] * 12,
+        [1.35] + [1] * 9 + [1.5],
+        [1.6] + [1] * 8 + [2.1],
+        [1.2, 1.2, 1.2, 5.5, 1.1, 1.1, 1.2],
     )
-    for row, (top, height, left, right, widths) in enumerate(rows):
+    projected_rows = (
+        (163, 5.2, 42, 169),
+        (170, 5.9, 39, 172),
+        (178, 6.2, 35, 175.5),
+        (186.5, 6.9, 31.5, 179),
+    )
+    for row, (top, height, left, right) in zip(range(3, -1, -1), projected_rows):
+        widths = widths_by_row[row]
         unit = (right-left) / sum(widths)
-        for col, weight in enumerate(widths):
-            end = left + weight * unit
+        for col in reversed(range(len(widths))):
+            end = left + widths[col] * unit
             yield (row, col), (left, top, end-1.35, height)
             left = end
 

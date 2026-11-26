@@ -20,6 +20,8 @@ SOCK = "#FFF1D8"
 SHADE = "#D7BFA7"
 GOLD = "#FFBD37"
 SCALE = 4
+CAP_LAUNCH = .18
+CAP_LANDING = .97
 
 
 class Brush:
@@ -71,6 +73,25 @@ class Brush:
                   f"C {x-k*rx} {y+ry} {x-rx} {y+k*ry} {x-rx} {y} Z", fill, line, width)
 
 
+def digit_legend(b, cx, cy, digit):
+    # Seven tiny engraved strokes, rotated to read from the cat's seat.
+    bars = ((-1,-1.6,1,-1.6), (1,-1.6,1,0), (1,0,1,1.6), (-1,1.6,1,1.6),
+            (-1,0,-1,1.6), (-1,-1.6,-1,0), (-1,0,1,0))
+    lit = ("012345", "12", "01643", "01623", "5612",
+           "05623", "056423", "012", "0123456", "501623")
+    strokes = []
+    for index in lit[digit]:
+        x1, y1, x2, y2 = bars[int(index)]
+        strokes.append(f"M {cx-x1} {cy-y1} L {cx-x2} {cy-y2}")
+    b.path(" ".join(strokes), None, "#8D7968", .65)
+
+
+def return_legend(b, x, y):
+    b.path(f"M {x-2.9} {y+1.05} L {x-2.9} {y-.9} L {x+2.1} {y-.9} "
+           f"M {x+.65} {y-1.9} L {x+2.2} {y-.9} L {x+.85} {y+.2}",
+           None, "#8F6439", .75)
+
+
 def keyboard(b, p):
     b.path("M 39 162 Q 40 159.5 44 159.5 L 169 159.5 Q 172 159.5 173 162 "
            "L 186.5 192 Q 190.5 201 183.5 202 L 27 202 Q 21.5 202 25 193 Z",
@@ -79,10 +100,11 @@ def keyboard(b, p):
            "L 184.8 193.7 Q 186.5 197.2 183 197.5 L 28.5 197.5 Q 26 197.5 27.2 194 Z",
            "#B7A183")
     b.path("M 43 162.5 L 169 162.5 L 182.3 195.2 L 29.6 195.2 Z", "#A49380")
-    accents = {(0, 0): "#EA9271", (2, 9): "#F2BA52", (3, 3): "#F4DCAB", (0, 11): "#96B7AA"}
+    accents = {(0, 0): "#EA9271", KEYS["enter"]: "#F2BA52",
+               KEYS["space"]: "#F1D49D", (0, 11): "#96B7AA"}
     for (row, col), (left, top, right, height) in keys():
         bottom = top + height
-        if (row, col) == KEYS["enter"] and .04 < p.keycap_time < .97:
+        if (row, col) == KEYS["enter"] and CAP_LAUNCH < p.keycap_time < CAP_LANDING:
             b.path(f"M {left} {top} L {right} {top} L {right+.6} {bottom} L {left-.7} {bottom} Z",
                    "#655D56")
             b.oval((left+right)/2, (top+bottom)/2, 2.2, 1.45, "#BE976E")
@@ -97,10 +119,15 @@ def keyboard(b, p):
         b.path(f"M {left+.6} {top} L {right-.6} {top} L {right} {bottom-1.6} "
                f"L {left-.4} {bottom-1.6} Z", tone)
         if (row, col) == KEYS["enter"]:
-            b.path(f"M {right-4} {top+1} L {right-4} {top+2.7} L {right-7} {top+2.7}",
-                   None, "#966D3D", .8)
-        elif (row, col) != KEYS["space"]:
-            b.path(f"M {left+2.2} {top+1.35} L {left+3.9} {top+1.35}", None, "#9B8A77", .7)
+            return_legend(b, (left+right)/2, (top+bottom-1.6)/2)
+        elif (row, col) == KEYS["space"]:
+            mid = (left+right)/2
+            b.path(f"M {mid-4} {top+2.8} L {mid-4} {top+1.6} L {mid+4} {top+1.6} L {mid+4} {top+2.8}",
+                   None, "#B49665", .65)
+        elif row == 0 and 1 <= col <= 10:
+            digit_legend(b, (left+right)/2, (top+bottom-1.6)/2, col % 10)
+        else:
+            b.path(f"M {right-3.9} {bottom-2.8} L {right-2.2} {bottom-2.8}", None, "#9B8A77", .7)
     b.path("M 31 199.6 L 89 199.6", None, "#5C5050", .85)
     b.oval(177.5, 199.5, 1, .6, "#C8A060")
 
@@ -210,28 +237,29 @@ def eye(b, x, y, rx, ry, p):
 
 def flying_keycap(image, t, head_point):
     """The displaced return cap tumbles, perches between the ears, then falls."""
-    if not .04 < t < .97:
+    if not CAP_LAUNCH < t < CAP_LANDING:
         return
     hat_x, hat_y = head_point(105, 37)
     key_x, key_y = key_center("enter")
     if t < .4:
-        progress = (t-.04)/.36
-        x = key_x + (hat_x-key_x)*progress + 18*math.sin(math.pi*progress)
+        progress = (t-CAP_LAUNCH)/(.4-CAP_LAUNCH)
+        x = key_x + (hat_x-key_x)*progress - 18*math.sin(math.pi*progress)
         y = key_y + (hat_y-key_y)*progress - 35*math.sin(math.pi*progress)
         tilt = 68*math.sin(math.pi*progress) - 13*progress
     elif t < .66:
         x, y, tilt = hat_x, hat_y, -13
     else:
-        progress = (t-.66)/.31
-        x = hat_x + (key_x-hat_x)*progress + 11*math.sin(math.pi*progress)
+        progress = (t-.66)/(CAP_LANDING-.66)
+        x = hat_x + (key_x-hat_x)*progress - 11*math.sin(math.pi*progress)
         y = hat_y + (key_y-hat_y)*progress*progress
-        tilt = -13 - 125*progress
+        tilt = -13 - 347*progress
     angle = math.radians(tilt)
     co, si = math.cos(angle), math.sin(angle)
     cap = Brush(image, lambda u,v: (x+u*co-v*si, y+u*si+v*co))
     cap.path("M -8 -4 Q -8 -5 -6 -5 L 5 -5 Q 6 -5 7 -4 L 10 2 "
              "Q 11 4 9 5 L -8 5 Q -10 5 -10 3 Z", "#DAA760", INK, 1.2)
     cap.path("M -6 -4 L 5 -4 L 7 0 Q 7 1 6 1 L -7 1 Z", "#FFF0C7")
+    return_legend(cap, -.5, -1.4)
     cap.path("M -7 2 L 7 2", None, "#B08451", .9)
     if .08 < t < .36 or .73 < t < .94:
         cap.path("M -3 8 L -2 14 M 2 8 L 3 11", None, "#A48B64", 1.2)

@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Soot Keys")]
 [assembly: AssemblyDescription("A four-pawed keyboard companion")]
 [assembly: AssemblyProduct("Soot Keys")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
 
 namespace SootKeys
 {
@@ -90,6 +90,7 @@ namespace SootKeys
             {
                 string path = Path.Combine(dir, "settings.ini");
                 PetSettings settings = new PetSettings(path);
+                Check(settings.ShowKeyName, "new install displays key names");
                 int[] widths = { 162, 192, 220, 249, 278 };
                 for (int i = 0; i < widths.Length; i++)
                 {
@@ -97,14 +98,16 @@ namespace SootKeys
                     Check(settings.Pixels(96).Width == widths[i], "size level " + i);
                     Check(settings.Save(), "saving settings");
                 }
-                settings.Follow = true; settings.Paused = true; settings.Anchor = new Point(-350, 510);
+                settings.Follow = true; settings.Paused = true; settings.ShowKeyName = false; settings.Anchor = new Point(-350, 510);
                 Check(settings.Save(), "saving position");
                 settings = new PetSettings(path);
                 Check(settings.Level == 4 && settings.Follow && settings.Paused && settings.Anchor == new Point(-350,510),
                       "restoring size, toggles and position");
+                Check(!settings.ShowKeyName, "remembering disabled key names");
                 File.WriteAllText(path, "size=999\nanchorX=1\npaused=maybe\n");
                 settings.Reload();
                 Check(settings.Level == PetSettings.Standard && !settings.Anchor.HasValue && !settings.Paused, "invalid settings recovery");
+                Check(settings.ShowKeyName, "older settings enable key names");
             }
             finally { Directory.Delete(dir, true); }
         }
@@ -118,6 +121,7 @@ namespace SootKeys
         {
             Motion cat = new Motion(42);
             int frame;
+            KeyboardKey.Verify();
             // Exercise the same Win32 packet decoder as WM_INPUT without sending input to other apps.
             int headerBytes = 8 + IntPtr.Size * 2;
             IntPtr packet = Marshal.AllocHGlobal(64);
@@ -128,10 +132,13 @@ namespace SootKeys
                 Marshal.WriteInt16(packet, headerBytes + 4, 1);
                 Check(Native.Decode(packet, 64) == Pose.Mouse, "left button down packet");
                 Marshal.WriteInt32(packet, 1);
+                string key;
                 Marshal.WriteInt16(packet, headerBytes, 0x39);
-                Check(Native.Decode(packet, 64) == Pose.Space, "keyboard make packet");
+                Marshal.WriteInt16(packet, headerBytes + 6, 0x20);
+                Check(Native.Decode(packet, 64, true, out key) == Pose.Space && key == "空格", "one key feeds caption and motion");
+                Check(Native.Decode(packet, 64, false, out key) == Pose.Space && key == null, "caption off preserves motion");
                 Marshal.WriteInt16(packet, headerBytes + 2, 1);
-                Check(Native.Decode(packet, 64) == Pose.Idle, "keyboard break packet");
+                Check(Native.Decode(packet, 64, true, out key) == Pose.Idle && key == null, "released key has no new caption");
                 Check(Native.Decode(packet, 10) == Pose.Idle, "truncated packet");
             }
             finally { Marshal.FreeHGlobal(packet); }
