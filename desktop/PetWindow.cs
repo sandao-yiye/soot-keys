@@ -13,7 +13,7 @@ namespace SootKeys
         readonly Motion motion = new Motion(Environment.TickCount);
         readonly Stopwatch clock = Stopwatch.StartNew();
         readonly Timer timer = new Timer { Interval = 20 };
-        readonly ContextMenuStrip menu = new ContextMenuStrip();
+        readonly PetMenu menu = new PetMenu();
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ToolStripMenuItem follow = new ToolStripMenuItem("整只猫跟随鼠标");
         readonly ToolStripMenuItem pause = new ToolStripMenuItem("暂停键鼠互动");
@@ -29,7 +29,8 @@ namespace SootKeys
         PointF position;
         Point dragOffset;
         double lastTick;
-        bool listening, dragging, dirty = true;
+        bool listening, mouseListening, grabbed, dragging, dirty = true;
+        Point pressPoint;
         int paints;
         Pose lastPose;
         int lastFrame;
@@ -64,8 +65,8 @@ namespace SootKeys
                     tray.ShowBalloonTip(3500, "墨爪", "未能打开 Codex。请确认已安装 Codex 桌面端。", ToolTipIcon.Info);
                 }
             });
-            menu.Items.Add("碎碎念", null, delegate { toolbox.Quip(); });
-            menu.Items.Add("墨爪百宝箱", null, delegate { toolbox.Open(); });
+            menu.Items.Add("碎碎念", null, delegate { toolbox.Quip(this); });
+            menu.Items.Add("墨爪百宝箱", null, delegate { toolbox.Open(this); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("回到初始位置", null, delegate
             {
@@ -127,19 +128,20 @@ namespace SootKeys
             tray.Text = "墨爪 · 右键设置，拖动小猫换位置";
             ContextMenuStrip = menu;
             tray.ContextMenuStrip = menu;
+            menu.Opened += delegate { SetMouseListening(true); };
+            menu.Closed += delegate { SetMouseListening(listening); };
             MouseDown += OnPetDown;
             MouseMove += OnPetMove;
             MouseUp += delegate(object sender, MouseEventArgs e)
             {
-                if (dragging && e.Button == MouseButtons.Left)
+                if (grabbed && e.Button == MouseButtons.Left)
                 {
-                    dragging = false;
+                    if (dragging) { preferences.Anchor = AnchorPoint(); SavePreferences(); }
+                    grabbed = dragging = false;
                     Capture = false;
-                    preferences.Anchor = AnchorPoint();
-                    SavePreferences();
                 }
             };
-            MouseCaptureChanged += delegate { if (!Capture) dragging = false; };
+            MouseCaptureChanged += delegate { if (!Capture) grabbed = dragging = false; };
             timer.Tick += delegate { Tick(); };
         }
 
@@ -226,9 +228,19 @@ namespace SootKeys
 
         void SetListening(bool enabled)
         {
-            if (enabled == listening) return;
-            Native.Listen(Handle, enabled);
-            listening = enabled;
+            if (enabled != listening)
+            {
+                Native.Listen(Handle, 6, enabled);
+                listening = enabled;
+            }
+            SetMouseListening(enabled || menu.Visible);
+        }
+
+        void SetMouseListening(bool enabled)
+        {
+            if (enabled == mouseListening) return;
+            Native.Listen(Handle, 2, enabled);
+            mouseListening = enabled;
         }
 
         void EnsureSurface()
@@ -249,18 +261,26 @@ namespace SootKeys
         {
             if (e.Button == MouseButtons.Left)
             {
-                nativeAligned = true;
-                follow.Checked = false;
+                if (menu.Visible) { menu.Close(ToolStripDropDownCloseReason.AppClicked); return; }
+                pressPoint = PointToScreen(e.Location);
                 dragOffset = e.Location;
-                dragging = true;
+                grabbed = true;
                 Capture = true;
             }
         }
 
         void OnPetMove(object sender, MouseEventArgs e)
         {
-            if (!dragging) return;
+            if (!grabbed) return;
             Point p = Cursor.Position;
+            if (!dragging)
+            {
+                Size threshold = SystemInformation.DragSize;
+                if (Math.Abs(p.X-pressPoint.X) < threshold.Width/2 && Math.Abs(p.Y-pressPoint.Y) < threshold.Height/2) return;
+                dragging = true;
+                nativeAligned = true;
+                follow.Checked = false;
+            }
             Rectangle desk = Screen.FromPoint(p).WorkingArea;
             position = new PointF(Clamp(p.X-dragOffset.X, desk.Left, desk.Right-surface.Size.Width),
                                   Clamp(p.Y-dragOffset.Y, desk.Top, desk.Bottom-surface.Size.Height));
@@ -299,7 +319,7 @@ namespace SootKeys
             Point cursor = listening ? Cursor.Position : Point.Empty;
             Size size = surface.Size;
             PointF oldPosition = position;
-            if (follow.Checked && listening && !dragging && !menu.Visible)
+            if (follow.Checked && listening && !grabbed && !menu.Visible)
                 FollowPointer(cursor, elapsed);
             int frame;
             Pose pose = motion.Frame(now, out frame);
@@ -322,7 +342,8 @@ namespace SootKeys
             {
                 timer.Stop();
                 if (paints < 2) throw new InvalidOperationException("Layered window did not animate.");
-                MenuSmoke.Verify(this, menu, levels, preferences);
+                MenuSmoke.Verify(this, menu, levels, preferences, pause);
+                toolbox.VerifyPopup(this);
                 ChangeSize(PetSettings.Standard);
                 Rectangle desk = Screen.FromHandle(Handle).WorkingArea;
                 Point original = AnchorPoint();
@@ -354,12 +375,26 @@ namespace SootKeys
             }
         }
 
+        internal void ProcessInput(Pose pose, Point screen)
+        {
+            if (pose == Pose.Mouse) menu.DismissOutside(screen);
+            if (listening && pose != Pose.Idle) motion.Strike(pose, clock.Elapsed.TotalSeconds);
+        }
+
         protected override void WndProc(ref Message m)
         {
-            if (m.Msg == Native.WmInput && listening)
+            if (m.Msg == 0x007b) // WM_CONTEXTMENU includes the originating screen point.
+            {
+                long packed = m.LParam.ToInt64();
+                Point point = packed == -1 ? PointToScreen(new Point(Width / 2, Height / 2)) :
+                    new Point(unchecked((short)packed), unchecked((short)(packed >> 16)));
+                menu.Prepare(point);
+            }
+            if (m.Msg == Native.WmInput && (listening || mouseListening))
             {
                 Pose pose = Native.ReadPose(m.LParam, scratch);
-                if (pose != Pose.Idle) motion.Strike(pose, clock.Elapsed.TotalSeconds);
+                if (pose != Pose.Idle)
+                    ProcessInput(pose, pose == Pose.Mouse ? Native.MessagePoint() : Point.Empty);
             }
             base.WndProc(ref m);
         }
@@ -370,9 +405,13 @@ namespace SootKeys
             {
                 timer.Dispose();
                 toolbox.Dispose();
-                if (listening)
+                if (listening || mouseListening)
                 {
-                    try { SetListening(false); }
+                    try
+                    {
+                        if (menu.Visible) menu.Close();
+                        SetListening(false);
+                    }
                     catch (Win32Exception) { } // Destroying the receiving window also unregisters its devices.
                 }
                 tray.Visible = false;

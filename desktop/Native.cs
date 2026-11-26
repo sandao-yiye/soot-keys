@@ -41,6 +41,24 @@ namespace SootKeys
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
         [DllImport("shcore.dll")] static extern int SetProcessDpiAwareness(int mode);
         [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(IntPtr window);
+        [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(Point point, uint flags);
+        [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
+        [DllImport("user32.dll")] static extern uint GetMessagePos();
+
+        internal static uint MonitorDpi(Point point)
+        {
+            uint x, y;
+            try { if (GetDpiForMonitor(MonitorFromPoint(point, 2), 0, out x, out y) == 0 && x > 0) return x; }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+            return 96;
+        }
+
+        internal static Point MessagePoint()
+        {
+            uint packed = GetMessagePos();
+            return new Point(unchecked((short)packed), unchecked((short)(packed >> 16)));
+        }
 
         internal static void DpiAware()
         {
@@ -49,17 +67,14 @@ namespace SootKeys
             catch (DllNotFoundException) { SetProcessDPIAware(); }
         }
 
-        internal static void Listen(IntPtr window, bool enable)
+        internal static void Listen(IntPtr window, ushort usage, bool enable)
         {
-            Device[] devices = new Device[2];
-            for (int i = 0; i < devices.Length; i++)
+            Device device = new Device
             {
-                devices[i].Page = 1;
-                devices[i].Usage = (ushort)(i == 0 ? 6 : 2);
-                devices[i].Flags = enable ? 0x100u : 1u;
-                devices[i].Window = enable ? window : IntPtr.Zero;
-            }
-            if (!RegisterRawInputDevices(devices, 2, (uint)Marshal.SizeOf(typeof(Device))))
+                Page = 1, Usage = usage, Flags = enable ? 0x100u : 1u,
+                Window = enable ? window : IntPtr.Zero
+            };
+            if (!RegisterRawInputDevices(new[] { device }, 1, (uint)Marshal.SizeOf(typeof(Device))))
                 throw new Win32Exception();
         }
 

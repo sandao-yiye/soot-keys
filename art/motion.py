@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from math import cos, pi, sin
 
+from desk import paw_contact
+
 
 @dataclass
 class Pose:
@@ -59,6 +61,7 @@ def pose_for(name, t):
         p.look_y = 0.18
         p.open = max(0.03, min(1, abs(t - 4 / 6) * 9))
     elif name in ("tapLeft", "tapRight", "space", "enter", "mouse"):
+        down = min(1, down / .9)
         side = -1 if name in ("tapLeft", "mouse") else 1
         p.x, p.y = side * down * 4, down * 3
         p.tilt, p.head_x = side * down * 7, side * down * 3
@@ -66,31 +69,31 @@ def pose_for(name, t):
         p.tail += down * 5
         p.key, p.press = name, down
         if name == "space":
-            p.rear_l = reach(p.rear_l, (102, 184), down)
+            p.rear_l = reach(p.rear_l, paw_contact(name), down)
             p.front_l = reach(p.front_l, (57, 122), down)
             p.front_r = reach(p.front_r, (131, 129), down)
             p.jaw = down * .4
         elif name == "enter":
-            p.rear_r = reach(p.rear_r, (159, 179), down)
+            p.rear_r = reach(p.rear_r, paw_contact(name), down)
             p.front_r = reach(p.front_r, (137, 124), down)
         elif name == "mouse":
             p.x, p.tilt = -8 * down, -10 * down
-            p.front_l = reach(p.front_l, (24, 173), down)
+            p.front_l = reach(p.front_l, paw_contact(name), down)
         elif name == "tapLeft":
-            p.front_l = reach(p.front_l, (69, 176), down)
+            p.front_l = reach(p.front_l, paw_contact(name), down)
             p.front_r = reach(p.front_r, (123, 135), down)
         else:
-            p.front_r = reach(p.front_r, (133, 176), down)
+            p.front_r = reach(p.front_r, paw_contact(name), down)
             p.front_l = reach(p.front_l, (69, 134), down)
     elif name in ("combo", "working"):
         # Two paired downbeats. A back foot steals the space bar.
         a = down
         b = (1 - cos(phase * 2)) / 2 if name == "combo" else 1 - a
         p.x, p.y, p.tilt = 5 * beat, 3 * abs(beat), 8 * beat
-        p.front_l = reach(p.front_l, (63, 174), a)
-        p.front_r = reach(p.front_r, (140, 177), b)
-        p.rear_l = reach(p.rear_l, (102, 184), a)
-        p.rear_r = reach(p.rear_r, (149, 168), b)
+        p.front_l = reach(p.front_l, paw_contact("tapLeft"), a)
+        p.front_r = reach(p.front_r, paw_contact("tapRight"), b)
+        p.rear_l = reach(p.rear_l, paw_contact("space"), a)
+        p.rear_r = reach(p.rear_r, paw_contact("enter"), b)
         p.look_x, p.look_y = beat * .65, .85
         p.key, p.press, p.tail = "combo", max(a, b), beat * 11
         p.jaw = down * .8
@@ -121,11 +124,11 @@ def pose_for(name, t):
         p.tail = -11 * lift
         p.look_y, p.jaw = -lift * .7, lift
     elif name == "failed":
-        # Crumple onto the keyboard and sneak one eye open on the return.
+        # Slump behind the board, with only the two paws flopping onto it.
         p.x, p.y, p.tilt = -4 * down, 11 * down, -13 * down
         p.head_y, p.open = 9 * down, 1 - .94 * down
-        p.front_l = reach(p.front_l, (59, 173), down)
-        p.front_r = reach(p.front_r, (139, 176), down)
+        p.front_l = reach(p.front_l, paw_contact("tapLeft"), down)
+        p.front_r = reach(p.front_r, paw_contact("tapRight"), down)
         p.tail, p.look_y = 15 * down, .6
     elif name == "waiting":
         p.tilt, p.head_x, p.head_y = -7 - 3 * down, -2, -3 * down

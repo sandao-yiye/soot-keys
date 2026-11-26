@@ -47,14 +47,39 @@ function Test-Spritesheet([string] $Path) {
     }
 }
 
+function Confirm-Manifest([string] $Directory) {
+    $installed = Join-Path $Directory 'pet.json'
+    $expected = [IO.File]::ReadAllText((Join-Path $source 'pet.json'))
+    if (-not [IO.File]::Exists($installed) -or
+        [IO.File]::ReadAllText($installed).Replace("`r`n","`n") -cne $expected.Replace("`r`n","`n")) {
+        throw "Missing or customized manifest at '$installed'."
+    }
+}
+
 function Confirm-PetFiles([string] $Directory) {
-    foreach ($name in $files) {
-        $installed = Join-Path $Directory $name
-        if (-not [IO.File]::Exists($installed) -or
-            (Get-FileHash -LiteralPath $installed).Hash -ne
-            (Get-FileHash -LiteralPath (Join-Path $source $name)).Hash) {
-            throw "A file is missing or differs at '$installed'. Back up any existing soot-keys folder before installing this version."
-        }
+    Confirm-Manifest $Directory
+    $installed = Join-Path $Directory 'spritesheet.webp'
+    if (-not [IO.File]::Exists($installed) -or (Get-FileHash -LiteralPath $installed).Hash -ne $newSpriteHash) {
+        throw "Missing or different artwork at '$installed'."
+    }
+}
+
+function Update-PublishedSprite([string] $Directory) {
+    Confirm-Manifest $Directory
+    $installed = Join-Path $Directory 'spritesheet.webp'
+    $current = (Get-FileHash -LiteralPath $installed).Hash
+    if ($current -eq $newSpriteHash) { return }
+    # The art distributed in v1.0 through v1.1.1 has one shared digest.
+    if ($current -ne '3DFA5888DF9F1B64D4FE5207F6EB0300D29AA1FB8D667BF06F84FA5C5E955BB0') {
+        throw "Artwork at '$installed' has been customized or belongs to a newer release. Back it up before installing."
+    }
+    $staged = Join-Path $Directory ([IO.Path]::GetRandomFileName())
+    try {
+        [IO.File]::Copy($sourceSprite,$staged)
+        if ((Get-FileHash -LiteralPath $staged).Hash -ne $newSpriteHash) { throw 'Artwork copy differs.' }
+        [IO.File]::Replace($staged,$installed,[System.Management.Automation.Language.NullString]::Value)
+    } finally {
+        [IO.File]::Delete($staged)
     }
 }
 
@@ -63,8 +88,11 @@ if ($manifest.spriteVersionNumber -ne 2 -or $manifest.spritesheetPath -cne 'spri
     [string]::IsNullOrWhiteSpace($manifest.displayName)) {
     throw 'Invalid pet.json. Expected a named v2 companion using spritesheet.webp.'
 }
-Test-Spritesheet (Join-Path $source 'spritesheet.webp')
+$sourceSprite = Join-Path $source 'spritesheet.webp'
+Test-Spritesheet $sourceSprite
+$newSpriteHash = (Get-FileHash -LiteralPath $sourceSprite).Hash
 if ($VerifyOnly -or (Test-Path -LiteralPath $destination)) {
+    if (-not $VerifyOnly) { Update-PublishedSprite $destination }
     Confirm-PetFiles $destination
 } else {
     [void][IO.Directory]::CreateDirectory($petRoot)

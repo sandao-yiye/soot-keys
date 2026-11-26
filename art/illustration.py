@@ -7,7 +7,9 @@ L, Q, C, Z commands, in a 192 by 208 design grid.
 import math
 
 import aggdraw
-from PIL import Image
+from PIL import Image, ImageDraw
+
+from desk import BOARD_BACK, CAT_SCALE, KEYS, cat_point, key_center, keys
 
 INK = "#171822"
 COAT = "#262631"
@@ -70,41 +72,40 @@ class Brush:
 
 
 def keyboard(b, p):
-    base = "M 47 160 Q 48 157 53 157 L 164 157 Q 169 157 170 161 L 179 184 Q 181 191 176 193 L 42 193 Q 37 193 39 186 Z"
-    b.path(base, INK, RIM, 2.6)
-    b.path("M 49 160 L 166 160 L 176 185 Q 176 188 173 188 L 44 188 Q 42 188 43 185 Z", "#958775")
-    b.path("M 50 160 L 165 160 L 173 184 L 45 184 Z", "#C8B7A0")
-    # Widths and row stagger reflect a compact split-colour mechanical board.
-    layouts = [[1] * 12, [1.35] + [1] * 9 + [1.5],
-               [1.6] + [1] * 8 + [2.1], [1.2, 1.2, 1.2, 5.5, 1.1, 1.1, 1.2]]
-    for row, weights in enumerate(layouts):
-        top = 161 + row * 5.8
-        first = 51 - row * 1.46
-        right = 164 + row * 1.62
-        unit = (right - first) / sum(weights)
-        for col, weight in enumerate(weights):
-            left = first
-            first += unit * weight
-            end = first - 1.15
-            if (row, col) == (2, 9) and .04 < p.keycap_time < .97:
-                b.path(f"M {left} {top} L {end} {top} L {end+.5} {top+4} "
-                       f"L {left-.5} {top+4} Z", "#70675F")
-                b.oval((left+end)/2, top+2, 1.9, 1.1, "#B59070")
-                continue
-            accent = { (0, 0): "#E98C65", (2, 9): "#F2BA52",
-                       (3, 3): "#F1D89F", (0, 11): "#95B8AC" }.get((row, col))
-            tone = accent or ("#F1E6D1" if (col + row) % 3 else "#FFF1D9")
-            lit = {"tapLeft": (2, 2), "tapRight": (2, 7), "space": (3, 3),
-                   "enter": (2, 9), "combo": (3, 3)}.get(p.key)
-            depressed = (row, col) == lit and p.press > .65
-            y = top + (1.1 if depressed else 0)
-            if depressed:
-                tone = "#F6AC56"
-            b.path(f"M {left} {y} L {end} {y} L {end+.55} {top+3.9} "
-                   f"Q {end+.55} {top+4.5} {end} {top+4.5} L {left-.7} {top+4.5} Z", tone)
-            if weight < 2.2:
-                b.path(f"M {left+2.1} {y+1.3} L {left+3.7} {y+1.3}", None, "#938478", .58)
-    b.path("M 49 190.1 L 92 190.1", None, "#48444A", .9)
+    b.path("M 39 162 Q 40 159.5 44 159.5 L 169 159.5 Q 172 159.5 173 162 "
+           "L 186.5 192 Q 190.5 201 183.5 202 L 27 202 Q 21.5 202 25 193 Z",
+           INK, RIM, 2)
+    b.path("M 40 163 Q 40.8 161 44 161 L 168 161 Q 170.5 161 171.5 163 "
+           "L 184.8 193.7 Q 186.5 197.2 183 197.5 L 28.5 197.5 Q 26 197.5 27.2 194 Z",
+           "#B7A183")
+    b.path("M 43 162.5 L 169 162.5 L 182.3 195.2 L 29.6 195.2 Z", "#A49380")
+    accents = {(0, 0): "#EA9271", (2, 9): "#F2BA52", (3, 3): "#F4DCAB", (0, 11): "#96B7AA"}
+    for (row, col), (left, top, right, height) in keys():
+        bottom = top + height
+        if (row, col) == KEYS["enter"] and .04 < p.keycap_time < .97:
+            b.path(f"M {left} {top} L {right} {top} L {right+.6} {bottom} L {left-.7} {bottom} Z",
+                   "#655D56")
+            b.oval((left+right)/2, (top+bottom)/2, 2.2, 1.45, "#BE976E")
+            continue
+        tone = accents.get((row, col), "#F4E8D3" if (col + row) % 3 else "#FFF3DD")
+        if (row, col) == KEYS.get(p.key) and p.press > .65:
+            top += 1.3
+            tone = "#F6AC56"
+        # Show each cap's front wall below the lighter typing surface.
+        b.path(f"M {left+.4} {top} L {right-.4} {top} L {right+.35} {bottom-1} "
+               f"Q {right+.45} {bottom} {right-.5} {bottom} L {left-.6} {bottom} Z", "#C6B09A")
+        b.path(f"M {left+.6} {top} L {right-.6} {top} L {right} {bottom-1.6} "
+               f"L {left-.4} {bottom-1.6} Z", tone)
+        if (row, col) == KEYS["enter"]:
+            b.path(f"M {right-4} {top+1} L {right-4} {top+2.7} L {right-7} {top+2.7}",
+                   None, "#966D3D", .8)
+        elif (row, col) != KEYS["space"]:
+            b.path(f"M {left+2.2} {top+1.35} L {left+3.9} {top+1.35}", None, "#9B8A77", .7)
+    b.path("M 31 199.6 L 89 199.6", None, "#5C5050", .85)
+    b.oval(177.5, 199.5, 1, .6, "#C8A060")
+
+
+def mouse(b):
     # A contrasting cream mouse, with a dark rubber underside and amber wheel.
     b.path("M 17 167 C 22 163 30 166 31 173 C 33 181 28 188 21 189 "
            "C 13 190 10 184 12 177 Q 13 170 17 167 Z", INK, RIM, 2.3)
@@ -212,17 +213,18 @@ def flying_keycap(image, t, head_point):
     if not .04 < t < .97:
         return
     hat_x, hat_y = head_point(105, 37)
+    key_x, key_y = key_center("enter")
     if t < .4:
         progress = (t-.04)/.36
-        x = 157 + (hat_x-157)*progress + 18*math.sin(math.pi*progress)
-        y = 175 + (hat_y-175)*progress - 35*math.sin(math.pi*progress)
+        x = key_x + (hat_x-key_x)*progress + 18*math.sin(math.pi*progress)
+        y = key_y + (hat_y-key_y)*progress - 35*math.sin(math.pi*progress)
         tilt = 68*math.sin(math.pi*progress) - 13*progress
     elif t < .66:
         x, y, tilt = hat_x, hat_y, -13
     else:
         progress = (t-.66)/.31
-        x = hat_x + (157-hat_x)*progress + 11*math.sin(math.pi*progress)
-        y = hat_y + (175-hat_y)*progress*progress
+        x = hat_x + (key_x-hat_x)*progress + 11*math.sin(math.pi*progress)
+        y = hat_y + (key_y-hat_y)*progress*progress
         tilt = -13 - 125*progress
     angle = math.radians(tilt)
     co, si = math.cos(angle), math.sin(angle)
@@ -238,18 +240,32 @@ def flying_keycap(image, t, head_point):
 def render(p, eyes=True, size=(192, 208)):
     image = Image.new("RGBA", (192*SCALE, 208*SCALE))
     b = Brush(image)
-    keyboard(b, p)
-    tail(b, p)
-    torso = Brush(image, lambda x,y: (x + p.x, y + p.y))
+    # Ground the hind paws on the far side of the keyboard. The shadow stays
+    # on the ground during jumps, across the strip of air behind the back rail.
+    floor = ImageDraw.Draw(image)
+    floor.ellipse(tuple(int(v*SCALE) for v in (59, 148.6, 139, 155)), fill=(48, 40, 42, 50))
+    cat = Brush(image, cat_point)
+    tail(cat, p)
+    torso = Brush(image, lambda x,y: cat_point(x + p.x, y + p.y))
     body(torso)
-    limb(b, (67+p.x, 142+p.y), p.rear_l, True)
-    limb(b, (125+p.x, 142+p.y), p.rear_r, True)
+    legs = [((67+p.x, 142+p.y), p.rear_l, True),
+            ((125+p.x, 142+p.y), p.rear_r, True)]
+    arms = [((73+p.x, 116+p.y), p.front_l, False),
+            ((119+p.x, 115+p.y), p.front_r, False)]
+    reaching = []
+    def paint_limb(start, end, rear):
+        if cat_point(*end)[1] + 6 >= BOARD_BACK:
+            reaching.append((start, end, rear))
+        else:
+            limb(cat, start, end, rear)
+    for leg in legs:
+        paint_limb(*leg)
     angle = math.radians(p.tilt)
     co, si = math.cos(angle), math.sin(angle)
 
     def head_point(x, y):
         u, v = x - 96, y - 85
-        return (96 + u*co - v*si + p.x + p.head_x,
+        return cat_point(96 + u*co - v*si + p.x + p.head_x,
                 85 + u*si + v*co + p.y + p.head_y)
 
     hb = Brush(image, head_point)
@@ -257,10 +273,15 @@ def render(p, eyes=True, size=(192, 208)):
     geometry = []
     for x, y, rx, ry in ((75, 70, 13.7, 13.2), (115.2, 68.6, 14.6, 13.7)):
         x, y = head_point(x + p.look_x*1.3, y + p.look_y*1.1)
+        rx, ry = rx * CAT_SCALE, ry * CAT_SCALE
         geometry.append((x, y, rx, ry))
         if eyes:
             eye(b, x, y, rx, ry, p)
-    limb(b, (73+p.x, 116+p.y), p.front_l)
-    limb(b, (119+p.x, 115+p.y), p.front_r)
+    for arm in arms:
+        paint_limb(*arm)
+    keyboard(b, p)
+    mouse(Brush(image, lambda x,y: (x-8, y+3)))
+    for start, end, rear in reaching:
+        limb(cat, start, end, rear)
     flying_keycap(image, p.keycap_time, head_point)
     return image.resize(size, Image.Resampling.LANCZOS), geometry

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace SootKeys
@@ -24,9 +25,9 @@ namespace SootKeys
             {"右爪敲出第一拍，观众只有一个光标。", "小猫用回车键打了个底鼓。", "四爪齐奏，第一排观众收到一枚飞来的键帽。"}
         };
         TabPage storyPage, gamePage;
-        readonly ComboBox program = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 180 };
+        readonly ComboBox program = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 238 };
         readonly Label subtitle = Paragraph(), focusDisplay = Paragraph();
-        readonly NumericUpDown minutes = new NumericUpDown { Minimum = 5, Maximum = 120, Value = 25, Width = 58 };
+        readonly NumericUpDown minutes = new NumericUpDown { Minimum = 5, Maximum = 120, Value = 25, Width = 83 };
         Button storyPlay, storyStep, focusPlay, focusStop;
         FlowLayoutPanel focusPresets;
         bool storyRunning, focusing;
@@ -159,7 +160,7 @@ namespace SootKeys
 
         readonly Panel arena = new Panel { Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle,
             BackColor = Color.FromArgb(218,232,222) };
-        readonly Button bubble = new Button { Text = "●", Size = new Size(46,46), Visible = false,
+        readonly Button bubble = new Button { Text = "●", Size = new Size(58,58), Visible = false,
             FlatStyle = FlatStyle.Popup, ForeColor = Color.FromArgb(58,87,81),
             BackColor = Color.FromArgb(255,219,143), AccessibleName = "接住泡泡" };
         readonly Label gameInfo = new Label { Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(2,5,2,5) };
@@ -240,6 +241,7 @@ namespace SootKeys
                 var actions = new List<Pose>();
                 using (var box = new CatToolbox(actions.Add, path))
                 {
+                    VerifySayings(box.sayings);
                     box.moves.SelectedIndex = 6;
                     box.PlaySelected();
                     if (actions.Count != 1 || actions[0] != Pose.Combo) throw new Exception("Action audition failed");
@@ -277,6 +279,47 @@ namespace SootKeys
                 foreach (string file in new[] { "toolbox.xml", "toolbox.xml.tmp" }) File.Delete(Path.Combine(path,file));
                 if (Directory.Exists(path)) Directory.Delete(path);
             }
+        }
+
+        static void VerifySayings(CatQuips sayings)
+        {
+            string previous=null;
+            for (int cycle=0; cycle<3; cycle++)
+            {
+                var seen=new HashSet<string>(StringComparer.Ordinal);
+                for (int i=0; i<sayings.Count; i++)
+                {
+                    string line=sayings.Next();
+                    if (line==previous || !seen.Add(line)) throw new Exception("Quip repeated.");
+                    previous=line;
+                }
+                if (seen.Count<50) throw new Exception("Too few distinct quips.");
+            }
+            var desk=new Rectangle(-1600,0,1600,900);
+            var size=new Size(290,100);
+            foreach (int x in new[] {desk.Left,desk.Right-110})
+            foreach (int y in new[] {desk.Top,desk.Bottom-120})
+            {
+                bool above; int tip;
+                var cat=new Rectangle(x,y,110,120);
+                Point at=CatSpeechBubble.Place(cat,desk,size,7,24,out above,out tip);
+                if (!desk.Contains(new Rectangle(at,size)) || above!=(y>desk.Top))
+                    throw new Exception("Speech bubble exceeded monitor bounds.");
+            }
+        }
+
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point position);
+        internal void VerifyPopup(Form actor)
+        {
+            IntPtr foreground=GetForegroundWindow();
+            Quip(actor);
+            Point center=new Point(speech.Left+speech.Width/2,speech.Top+speech.Height/2);
+            if (Visible || !speech.IsShowing || GetForegroundWindow()!=foreground ||
+                WindowFromPoint(center)==speech.Handle || !Screen.FromControl(actor).WorkingArea.Contains(speech.Bounds))
+                throw new Exception("Speech must stay near the cat without opening the toolbox or intercepting input.");
+            speech.UpdateBubble(8000);
+            if (Visible || speech.IsShowing) throw new Exception("Speech did not expire.");
         }
     }
 }

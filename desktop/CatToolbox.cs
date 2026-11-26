@@ -22,21 +22,22 @@ namespace SootKeys
             "偷个小懒吧，我帮你演出一副很忙的样子。", "今晚的月亮有点像掉到地上的键帽。",
             "慢慢来。猫连坐下都要先转半圈。", "墨爪盖章：今天有一件小事会做得很顺。"
         };
-        static readonly string[] Quips = {
-            "谁又把空格键装在了我脚底？", "我数过了，四只爪子够用，再多是管理问题。",
-            "别看我。我只负责批准键帽起飞。", "光标一闪一闪的，我差点就扑上去了。",
-            "刚才那串乱码是尾巴提交的。", "我打字靠手速，撤回靠后脚。"
-        };
         readonly Action<Pose> audition;
         readonly CatToolboxData data;
         readonly Random random = new Random();
+        readonly CatQuips sayings;
+        CatSpeechBubble speech;
+        Font panelFont = new Font("Microsoft YaHei UI",16,GraphicsUnit.Pixel);
+        Font featureFont = new Font("Microsoft YaHei UI",20,GraphicsUnit.Pixel);
+        int layoutDpi=96;
+        bool placed;
         readonly Stopwatch clock = Stopwatch.StartNew();
         readonly Timer tick = new Timer { Interval = 200 };
         readonly TabControl tabs = new TabControl { Dock = DockStyle.Fill };
-        readonly Label feedback = new Label { Dock = DockStyle.Bottom, Height = 42,
-            TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(14, 2, 14, 2) };
-        readonly TextBox search = new TextBox { Width = 160 };
-        readonly ComboBox filter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 95 };
+        readonly Label feedback = new Label { Dock = DockStyle.Bottom, Height = 60,
+            TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(18, 4, 18, 4) };
+        readonly TextBox search = new TextBox { Width = 210 };
+        readonly ComboBox filter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 126 };
         readonly ListBox moves = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
         readonly List<int> visibleMoves = new List<int>();
         readonly Label fortune = Paragraph();
@@ -51,14 +52,20 @@ namespace SootKeys
         internal CatToolbox(Action<Pose> audition, string directory)
         {
             this.audition = audition;
+            sayings = new CatQuips(random);
             data = new CatToolboxData(directory);
             Text = "墨爪百宝箱";
-            AutoScaleMode = AutoScaleMode.Dpi;
-            Font = SystemFonts.MessageBoxFont;
-            BackColor = Color.FromArgb(246, 246, 237);
-            ClientSize = new Size(520, 402);
-            MinimumSize = new Size(470, 380);
-            StartPosition = FormStartPosition.CenterScreen;
+            AutoScaleMode = AutoScaleMode.None;
+            Font = panelFont;
+            BackColor = Color.FromArgb(250,246,232);
+            ForeColor = Color.FromArgb(48,46,40);
+            ClientSize = new Size(780, 540);
+            StartPosition = FormStartPosition.Manual;
+            tabs.Padding = new Point(14,9);
+            tabs.Multiline = true;
+            subtitle.Font = focusDisplay.Font = fortune.Font = featureFont;
+            FormatList(moves);
+            FormatList(kept);
             TopMost = true;
             KeyPreview = true;
             Controls.Add(tabs);
@@ -90,17 +97,61 @@ namespace SootKeys
             Status(data.Remaining > 0 ? "上次的专注已暂停，可在「专注」里继续。" : "选一个动作，叫墨爪演给你看。");
         }
 
-        internal void Open()
+        internal void Open(Form pet)
         {
             if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            if (!Visible)
+            {
+                Rectangle desk=Screen.FromRectangle(placed ? Bounds : CatSpeechBubble.PetBounds(pet)).WorkingArea;
+                SetLayoutDpi(CatSpeechBubble.PetDpi(placed ? this : pet));
+                float scale=layoutDpi/96F;
+                int margin=(int)Math.Round(10*scale);
+                Rectangle interior=desk;
+                if (desk.Width>2*margin && desk.Height>2*margin) interior.Inflate(-margin,-margin);
+                MinimumSize=new Size(Math.Min(interior.Width,(int)(486*scale)),Math.Min(interior.Height,(int)(340*scale)));
+                Size wanted=placed ? Size : SizeFromClientSize(new Size((int)(780*scale),(int)(540*scale)));
+                Size=new Size(Math.Min(interior.Width,wanted.Width),Math.Min(interior.Height,wanted.Height));
+                Location=placed
+                    ? new Point(Math.Max(interior.Left,Math.Min(Left,interior.Right-Width)),
+                                Math.Max(interior.Top,Math.Min(Top,interior.Bottom-Height)))
+                    : new Point(interior.Left+(interior.Width-Width)/2,interior.Top+(interior.Height-Height)/2);
+                placed=true;
+            }
             Show();
             Activate();
         }
 
-        internal void Quip()
+        void SetLayoutDpi(int newDpi)
         {
-            Open();
-            Status(Quips[random.Next(Quips.Length)]);
+            if (layoutDpi==newDpi) return;
+            float ratio=(float)newDpi/layoutDpi, scale=newDpi/96F;
+            layoutDpi=newDpi;
+            SuspendLayout();
+            try
+            {
+                foreach (Control child in Controls) child.Scale(new SizeF(ratio,ratio));
+                Font oldPanel=panelFont, oldFeature=featureFont;
+                panelFont=new Font("Microsoft YaHei UI",16*scale,GraphicsUnit.Pixel);
+                featureFont=new Font("Microsoft YaHei UI",20*scale,GraphicsUnit.Pixel);
+                Font=panelFont;
+                subtitle.Font=focusDisplay.Font=fortune.Font=featureFont;
+                tabs.Padding=new Point((int)(14*scale),(int)(9*scale));
+                oldPanel.Dispose();
+                oldFeature.Dispose();
+            }
+            finally { ResumeLayout(true); }
+        }
+
+        protected override void WndProc(ref Message msg)
+        {
+            base.WndProc(ref msg);
+            if (msg.Msg==0x02e0 && Visible) SetLayoutDpi((int)msg.WParam.ToInt64() & 0xffff);
+        }
+
+        internal void Quip(Form pet)
+        {
+            if (speech==null) speech=new CatSpeechBubble();
+            speech.Say(pet,sayings.Next());
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -121,7 +172,25 @@ namespace SootKeys
         static Label Paragraph()
         {
             return new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(8), AutoEllipsis = true };
+                Padding = new Padding(16,8,12,8), AutoEllipsis = true };
+        }
+        static void FormatList(ListBox list)
+        {
+            list.DrawMode=DrawMode.OwnerDrawFixed;
+            list.DrawItem+=delegate(object sender, DrawItemEventArgs e) {
+                if (e.Index<0 || e.Index>=list.Items.Count) return;
+                e.DrawBackground();
+                Rectangle text=e.Bounds;
+                text.Inflate(-8,0);
+                TextRenderer.DrawText(e.Graphics,list.GetItemText(list.Items[e.Index]),e.Font,text,e.ForeColor,
+                    TextFormatFlags.Left|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|
+                    TextFormatFlags.EndEllipsis|TextFormatFlags.NoPrefix);
+                e.DrawFocusRectangle();
+            };
+            EventHandler adjustHeight=delegate { list.ItemHeight=Math.Max(32,(int)Math.Ceiling(list.Font.Height*1.65)); };
+            list.FontChanged+=adjustHeight;
+            list.HandleCreated+=adjustHeight;
+            adjustHeight(null,EventArgs.Empty);
         }
         static FlowLayoutPanel Row()
         {
@@ -130,16 +199,17 @@ namespace SootKeys
         }
         static Button Command(Control parent, string title, Action handler)
         {
-            Button button = new Button { Text = title, AutoSize = true, MinimumSize = new Size(58, 29),
-                UseVisualStyleBackColor = true, Margin = new Padding(2, 2, 4, 2) };
+            Button button = new Button { Text = title, AutoSize = true, MinimumSize = new Size(84, 40),
+                Padding=new Padding(6,2,6,2), UseVisualStyleBackColor = true, Margin = new Padding(0, 5, 10, 5) };
             button.Click += delegate { handler(); };
             parent.Controls.Add(button);
             return button;
         }
         TabPage Page(string title, out TableLayoutPanel layout)
         {
-            TabPage page = new TabPage(title) { Padding = new Padding(10), UseVisualStyleBackColor = true };
-            layout = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Fill };
+            TabPage page = new TabPage(title) { Padding = new Padding(16), UseVisualStyleBackColor = true,
+                AutoScroll = true };
+            layout = new TableLayoutPanel { ColumnCount = 1, Dock = DockStyle.Fill, MinimumSize=new Size(340,246) };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             page.Controls.Add(layout);
             tabs.TabPages.Add(page);
@@ -218,7 +288,8 @@ namespace SootKeys
         {
             TableLayoutPanel layout;
             Page("心情签", out layout);
-            fortune.Height = 66;
+            fortune.Height = 86;
+            fortune.MinimumSize = new Size(0,86);
             fortune.Text = "墨爪备了十六张签，来抽一张。";
             Add(layout, fortune, false);
             var buttons = Row();
@@ -273,8 +344,10 @@ namespace SootKeys
                 tick.Stop();
                 tick.Dispose();
                 PauseFocus();
+                if (speech!=null) speech.Dispose();
             }
             base.Dispose(disposing);
+            if (disposing) { panelFont.Dispose(); featureFont.Dispose(); }
         }
     }
 }
