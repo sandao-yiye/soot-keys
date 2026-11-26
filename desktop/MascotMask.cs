@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Windows.Automation;
 
 namespace SootKeys
 {
@@ -24,6 +25,7 @@ namespace SootKeys
         Task<Hit> scan;
         DateTime nextScan, nextHostCheck;
         bool hostPresent;
+        internal Point? Anchor { get; private set; }
         Process watchdog;
         EventWaitHandle watcherStop;
         readonly HashSet<int> processes = new HashSet<int>();
@@ -105,13 +107,15 @@ namespace SootKeys
 
         // Read only MSAA roles, the document URL, and the named sprite bounds.
         // The app uses a dedicated accessible label on this element.
-        static Rectangle FindSprite(IAccessible node, bool inOverlay, int depth, ref int budget, ref bool overlay)
+        static Rectangle FindSprite(IAccessible node, bool inOverlay, int depth, ref int budget, ref bool overlay, ref bool cold)
         {
             if (depth > 14 || --budget < 0) return Rectangle.Empty;
             int role = Convert.ToInt32(node.get_accRole(0));
             if (role == 15)
             {
-                inOverlay = Route(node.get_accValue(0));
+                string url = node.get_accValue(0);
+                if (string.IsNullOrEmpty(url) && node.accChildCount == 0) cold = true;
+                inOverlay = Route(url);
                 if (!inOverlay) return Rectangle.Empty;
                 overlay = true;
             }
@@ -133,10 +137,29 @@ namespace SootKeys
             {
                 IAccessible child = children[i] as IAccessible;
                 if (child == null) continue;
-                Rectangle result = FindSprite(child,inOverlay,depth+1,ref budget,ref overlay);
+                Rectangle result = FindSprite(child,inOverlay,depth+1,ref budget,ref overlay,ref cold);
                 if (!result.IsEmpty) return result;
             }
             return Rectangle.Empty;
+        }
+
+        // Chromium can initially return an empty MSAA document until a UIA client
+        // requests the document provider. Only query this candidate HWND; MSAA
+        // must still match both the Codex route and the exact sprite label.
+        static void RequestDocument(IntPtr hwnd)
+        {
+            try
+            {
+                AutomationElement surface = AutomationElement.FromHandle(hwnd);
+                if (surface != null)
+                    surface.FindFirst(TreeScope.Descendants, new PropertyCondition(
+                        AutomationElement.ControlTypeProperty, ControlType.Document));
+            }
+            catch (ElementNotAvailableException) { }
+            catch (COMException) { }
+            catch (InvalidOperationException) { }
+            catch (UnauthorizedAccessException) { }
+            catch (ArgumentException) { }
         }
 
         static Hit Discover(HashSet<int> hosts)
@@ -155,20 +178,26 @@ namespace SootKeys
                     return true;
                 },IntPtr.Zero);
                 surfaces.Add(hwnd);
-                foreach (IntPtr surface in surfaces)
+                for (int pass=0; pass<2; pass++)
                 {
-                    Guid iid = typeof(IAccessible).GUID; IAccessible root;
-                    try
+                    bool cold = false;
+                    foreach (IntPtr surface in surfaces)
                     {
-                        if (AccessibleObjectFromWindow(surface,0xfffffffc,ref iid,out root) < 0 || root==null) continue;
-                        int budget=220;
-                        sprite=FindSprite(root,false,0,ref budget,ref overlay);
-                        if (!sprite.IsEmpty) break;
+                        Guid iid = typeof(IAccessible).GUID; IAccessible root;
+                        try
+                        {
+                            if (AccessibleObjectFromWindow(surface,0xfffffffc,ref iid,out root) < 0 || root==null) continue;
+                            int budget=220;
+                            sprite=FindSprite(root,false,0,ref budget,ref overlay,ref cold);
+                            if (!sprite.IsEmpty) break;
+                        }
+                        catch (COMException) { }
+                        catch (InvalidCastException) { }
+                        catch (ArgumentException) { }
+                        catch (NotImplementedException) { }
                     }
-                    catch (COMException) { }
-                    catch (InvalidCastException) { }
-                    catch (ArgumentException) { }
-                    catch (NotImplementedException) { }
+                    if (!cold || overlay || pass != 0) break;
+                    RequestDocument(hwnd);
                 }
                 if (!overlay) return true;
                 match = new Hit { Window=hwnd,Frame=Bounds(hwnd),Sprite=sprite };
@@ -179,9 +208,11 @@ namespace SootKeys
 
         internal bool Refresh(bool cover)
         {
-            if (known != IntPtr.Zero && (!IsWindow(known) || !IsHostWindow(known))) known = IntPtr.Zero;
+            if (known != IntPtr.Zero && (!IsWindow(known) || !IsHostWindow(known)))
+            { known = IntPtr.Zero; Anchor = null; }
+            if (!cover) Anchor = null;
             if (!cover || masked != IntPtr.Zero && (GetForegroundWindow()==masked || Bounds(masked)!=lastFrame ||
-                !IsWindowVisible(masked))) Release();
+                !IsWindowVisible(masked))) RestoreCurrent();
             if (scan != null && scan.IsCompleted)
             {
                 Hit hit = scan.Status==TaskStatus.RanToCompletion ? scan.Result : null;
@@ -190,11 +221,12 @@ namespace SootKeys
                 if (hit != null && IsHostWindow(hit.Window) && IsWindowVisible(hit.Window))
                 {
                     known=hit.Window;
-                    if (cover && GetForegroundWindow()!=known && Bounds(known)==hit.Frame &&
-                        ValidSprite(hit.Frame,hit.Sprite)) Apply(hit);
-                    else Release();
+                    bool verified = Bounds(known)==hit.Frame && ValidSprite(hit.Frame,hit.Sprite);
+                    Anchor = verified && cover ? (Point?)new Point(hit.Sprite.Left + hit.Sprite.Width/2,hit.Sprite.Bottom) : null;
+                    if (cover && GetForegroundWindow()!=known && verified) Apply(hit);
+                    else RestoreCurrent();
                 }
-                else Release();
+                else { Anchor = null; RestoreCurrent(); }
             }
             if (scan==null && DateTime.UtcNow>=nextScan)
             {
@@ -233,7 +265,7 @@ namespace SootKeys
         void Apply(Hit hit)
         {
             if (masked==hit.Window && lastFrame==hit.Frame && lastSprite==hit.Sprite) return;
-            Release();
+            RestoreCurrent();
             if (watchdog == null || watchdog.HasExited)
             {
                 try
@@ -301,7 +333,13 @@ namespace SootKeys
             EnumWindows(delegate(IntPtr hwnd,IntPtr z){ Restore(hwnd,pid); return true; },IntPtr.Zero);
             return 0;
         }
-        internal void Release() { Restore(masked,ThisPid); masked=IntPtr.Zero; }
+        void RestoreCurrent() { Restore(masked,ThisPid); masked=IntPtr.Zero; }
+        internal void Release()
+        {
+            RestoreCurrent();
+            Anchor = null;
+            known = IntPtr.Zero;
+        }
         public void Dispose()
         {
             Release();

@@ -3,6 +3,32 @@
 param([string] $Executable = (Join-Path $PSScriptRoot '..\desktop\dist\SootKeys.exe'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class PickerDbFixture {
+    [DllImport("winsqlite3.dll", CharSet=CharSet.Unicode, ExactSpelling=true, CallingConvention=CallingConvention.Cdecl)]
+    private static extern int sqlite3_open16(string file, out IntPtr db);
+    [DllImport("winsqlite3.dll", CharSet=CharSet.Ansi, ExactSpelling=true, CallingConvention=CallingConvention.Cdecl)]
+    private static extern int sqlite3_exec(IntPtr db, string sql, IntPtr fn, IntPtr data, IntPtr error);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    private static extern int sqlite3_close(IntPtr db);
+    public static void Apply(string path, bool open) {
+        IntPtr db;
+        int rc = sqlite3_open16(path,out db);
+        try {
+            if (rc == 0) {
+                string sql = "BEGIN; CREATE TABLE IF NOT EXISTS settings(scope TEXT, key TEXT, value TEXT, PRIMARY KEY(scope,key));"
+                    + "INSERT OR REPLACE INTO settings VALUES ('global','electron-avatar-overlay-open','" + (open ? "true" : "false") + "'),"
+                    + "('global','electron-renderer-content-owner','\"test-owner\"'),"
+                    + "('electron-owner-atoms:test-owner','migrated-cloud-pet-ids-v1','{\"account\":{\"custom:soot-keys\":\"pet_fixture\"}}'); COMMIT;";
+                rc = sqlite3_exec(db,sql,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
+            }
+            if (rc != 0) throw new InvalidOperationException("Fixture SQLite error " + rc);
+        } finally { if (db != IntPtr.Zero) sqlite3_close(db); }
+    }
+}
+'@
 $assembly = [Reflection.Assembly]::LoadFrom((Resolve-Path -LiteralPath $Executable).Path)
 $flags = [Reflection.BindingFlags]'Instance,Public,NonPublic'
 function New-Internal([string]$Name, [object[]]$Values) {
@@ -24,14 +50,9 @@ function Get-WindowWidth($Form) {
 }
 function Write-Fixture([string]$Selection,[bool]$IsOpen) {
     [IO.File]::WriteAllText((Join-Path $fixture 'config.toml'), "[desktop]`nselected-avatar-id = '$Selection'`n")
-    $snapshot = @{
-        'electron-avatar-overlay-open' = $IsOpen
-        'electron-renderer-content-owner' = 'test-owner'
-        'electron-owner-atoms:test-owner' = @{
-            'migrated-cloud-pet-ids-v1' = @{account=@{'custom:soot-keys'='pet_fixture'}}
-        }
-    } | ConvertTo-Json -Compress -Depth 6
-    [IO.File]::WriteAllText((Join-Path $fixture '.codex-global-state.json'),$snapshot)
+    # Reproduce a migrated installation: the legacy file permanently says closed.
+    [IO.File]::WriteAllText((Join-Path $fixture '.codex-global-state.json'),'{"electron-avatar-overlay-open":false}')
+    [PickerDbFixture]::Apply((Join-Path $fixture '.codex-global-state.sqlite'),$IsOpen)
 }
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('SootKeys-Picker-' + [Guid]::NewGuid().ToString('N'))
 $null = [IO.Directory]::CreateDirectory($fixture)
@@ -70,7 +91,7 @@ try {
     if ($null -eq $cat -or (Get-WindowWidth $cat) -ne $previousWidth) { throw 'Migrated pet failed to reopen at the selected size.' }
     Write-Fixture 'pet_fixture' $false
     if ($null -ne (Tick-Host)) { throw 'Dismissing the pet did not release the window.' }
-    'PASS - local and migrated selection, live app detection, all five menu sizes, reopen, switch and dismiss'
+    'PASS - SQLite supersedes stale JSON, local and cloud selection, live app detection, five sizes, reopen, switch and dismiss'
 } finally {
     if ($runner) { $runner.Dispose() }
     if ($link) { $link.Dispose() }

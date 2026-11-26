@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Soot Keys")]
 [assembly: AssemblyDescription("A four-pawed keyboard companion")]
 [assembly: AssemblyProduct("Soot Keys")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.1.1.0")]
+[assembly: AssemblyFileVersion("1.1.1.0")]
 
 namespace SootKeys
 {
@@ -62,6 +62,7 @@ namespace SootKeys
                     using (LiveHost host = new LiveHost(new PetSettings(PetSettings.DefaultPath),
                               link == null ? (Func<bool, bool>)null : link.Refresh, gate.Stopping, gate.ManualRequested))
                     {
+                        if (link != null) host.NativeAnchor = delegate { return link.Anchor; };
                         Application.Run(host);
                     }
                 }

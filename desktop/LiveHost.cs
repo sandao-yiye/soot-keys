@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -14,6 +15,8 @@ namespace SootKeys
         Illustration art;
         PetWindow cat;
         bool manual, shelved;
+        DateTime? waitForAnchor;
+        internal Func<Point?> NativeAnchor { private get; set; }
         volatile bool sessionLocked;
         bool exit;
 
@@ -49,10 +52,18 @@ namespace SootKeys
             if (active) manual = false;
             if ((active || manual) && !shelved && !sessionLocked)
             {
-                if (cat != null) return;
+                Point? anchor = active && NativeAnchor != null ? NativeAnchor() : null;
+                if (cat != null) { cat.AlignToNative(anchor); return; }
+                // Chromium's accessible sprite can appear after the picker state changes.
+                if (active && NativeAnchor != null && !anchor.HasValue && !preferences.Anchor.HasValue && !preferences.Follow)
+                {
+                    if (!waitForAnchor.HasValue) waitForAnchor = DateTime.UtcNow;
+                    if (DateTime.UtcNow - waitForAnchor.Value < TimeSpan.FromMilliseconds(750)) return;
+                }
                 if (art == null) art = new Illustration();
                 cat = new PetWindow(art, preferences, false, quiet, selected != null);
                 cat.FormClosed += UserClosed;
+                cat.AlignToNative(anchor);
                 cat.Show();
             }
             else DropWindow();
@@ -70,6 +81,7 @@ namespace SootKeys
 
         void DropWindow()
         {
+            waitForAnchor = null;
             if (cat == null) return;
             cat.FormClosed -= UserClosed;
             cat.Dispose();

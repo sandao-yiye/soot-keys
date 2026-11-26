@@ -22,7 +22,8 @@ namespace SootKeys
         readonly PetSettings preferences;
         readonly CatToolbox toolbox;
         readonly ToolStripMenuItem[] levels = new ToolStripMenuItem[PetSettings.Sizes.Length];
-        bool refreshing;
+        bool refreshing, nativeAligned;
+        Point? initialNativeAnchor;
         readonly IntPtr scratch = Marshal.AllocHGlobal(64);
         Surface surface;
         PointF position;
@@ -68,6 +69,7 @@ namespace SootKeys
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("回到初始位置", null, delegate
             {
+                nativeAligned = true;
                 preferences.Anchor = null;
                 follow.Checked = false;
                 RestorePosition();
@@ -123,6 +125,7 @@ namespace SootKeys
             RefreshMenu();
             tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             tray.Text = "墨爪 · 右键设置，拖动小猫换位置";
+            ContextMenuStrip = menu;
             tray.ContextMenuStrip = menu;
             MouseDown += OnPetDown;
             MouseMove += OnPetMove;
@@ -189,6 +192,15 @@ namespace SootKeys
             PlaceAt(preferences.Anchor ?? new Point(desk.Right - surface.Size.Width / 2 - 24, desk.Bottom - 20));
         }
 
+        internal void AlignToNative(Point? anchor)
+        {
+            if (nativeAligned || !anchor.HasValue || preferences.Anchor.HasValue ||
+                preferences.Follow || dragging || menu.Visible) return;
+            if (surface == null) { initialNativeAnchor = anchor; return; }
+            PlaceAt(anchor.Value);
+            nativeAligned = true;
+        }
+
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams
         {
@@ -205,6 +217,7 @@ namespace SootKeys
             base.OnShown(e);
             EnsureSurface();
             RestorePosition();
+            AlignToNative(initialNativeAnchor);
             SetListening(!preferences.Paused);
             tray.Visible = !quiet;
             Tick();
@@ -234,13 +247,9 @@ namespace SootKeys
 
         void OnPetDown(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Right)
-            {
-                menu.Show(Cursor.Position);
-                return;
-            }
             if (e.Button == MouseButtons.Left)
             {
+                nativeAligned = true;
                 follow.Checked = false;
                 dragOffset = e.Location;
                 dragging = true;
@@ -265,6 +274,22 @@ namespace SootKeys
             return Math.Abs(distance) < .5f ? target : current + distance * rate;
         }
 
+        void FollowPointer(Point cursor, double elapsed)
+        {
+            Size size = surface.Size;
+            int gap = Math.Max(20, size.Width/8);
+            // Let the pointer reach a moving cat. Nearby it perches until the user leaves.
+            Rectangle perch = new Rectangle(Point.Round(position), size);
+            perch.Inflate(gap * 2, gap * 2);
+            if (perch.Contains(cursor)) return;
+            Rectangle desk = Screen.FromPoint(cursor).WorkingArea;
+            int x = cursor.X + gap + size.Width <= desk.Right ? cursor.X+gap : cursor.X-size.Width-gap;
+            int y = cursor.Y + gap + size.Height <= desk.Bottom ? cursor.Y+gap : cursor.Y-size.Height-gap;
+            float rate = (float)(1-Math.Exp(-elapsed*9));
+            position.X = Step(position.X, Clamp(x, desk.Left, desk.Right-size.Width), rate);
+            position.Y = Step(position.Y, Clamp(y, desk.Top, desk.Bottom-size.Height), rate);
+        }
+
         void Tick()
         {
             EnsureSurface();
@@ -275,15 +300,7 @@ namespace SootKeys
             Size size = surface.Size;
             PointF oldPosition = position;
             if (follow.Checked && listening && !dragging && !menu.Visible)
-            {
-                Rectangle desk = Screen.FromPoint(cursor).WorkingArea;
-                int gap = Math.Max(20, size.Width/8);
-                int x = cursor.X + gap + size.Width <= desk.Right ? cursor.X+gap : cursor.X-size.Width-gap;
-                int y = cursor.Y + gap + size.Height <= desk.Bottom ? cursor.Y+gap : cursor.Y-size.Height-gap;
-                float rate = (float)(1-Math.Exp(-elapsed*9));
-                position.X = Step(position.X, Clamp(x, desk.Left, desk.Right-size.Width), rate);
-                position.Y = Step(position.Y, Clamp(y, desk.Top, desk.Bottom-size.Height), rate);
-            }
+                FollowPointer(cursor, elapsed);
             int frame;
             Pose pose = motion.Frame(now, out frame);
             if (listening) motion.Look(cursor.X-position.X-size.Width*.50, cursor.Y-position.Y-size.Height*.32, elapsed);
@@ -303,7 +320,23 @@ namespace SootKeys
             lastLeft = blink; lastRight = right;
             if (smokeTest && now >= .9)
             {
+                timer.Stop();
                 if (paints < 2) throw new InvalidOperationException("Layered window did not animate.");
+                MenuSmoke.Verify(this, menu, levels, preferences);
+                ChangeSize(PetSettings.Standard);
+                Rectangle desk = Screen.FromHandle(Handle).WorkingArea;
+                Point original = AnchorPoint();
+                Point native = new Point(desk.Left + desk.Width/2, desk.Top + desk.Height/2);
+                preferences.Anchor = original;
+                AlignToNative(native);
+                if (AnchorPoint() != original) throw new InvalidOperationException("Native position overrode a saved position.");
+                preferences.Anchor = null;
+                AlignToNative(native);
+                AlignToNative(original);
+                if (AnchorPoint() != native) throw new InvalidOperationException("Delayed native anchor was not applied exactly once.");
+                PointF perched = position;
+                FollowPointer(Point.Round(new PointF(position.X - 10, position.Y + surface.Size.Height / 2f)), .1);
+                if (position != perched) throw new InvalidOperationException("Following cat moved away from an approaching pointer.");
                 Size prior = surface.Size;
                 Point anchor = AnchorPoint();
                 for (int i = 0; i < levels.Length; i++)
